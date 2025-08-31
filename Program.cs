@@ -37,6 +37,18 @@ builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddSingleton<IMultiTenantTokenService, MultiTenantTokenService>();
 builder.Services.AddSingleton<IEnterpriseOAuthPolicyService, EnterpriseOAuthPolicyService>();
 builder.Services.AddSingleton<IClientCertificateService, ClientCertificateService>();
+// WebAuthn service registration - implementation in progress
+
+// Add session support for WebAuthn challenges
+builder.Services.AddDistributedMemoryCache();
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(10);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+});
 
 // Configure authentication database (in-memory for development)
 builder.Services.AddDbContext<AuthDbContext>(options =>
@@ -60,6 +72,9 @@ var app = builder.Build();
 // Enable CORS middleware
 app.UseCors();
 
+// Add session support for WebAuthn challenges
+app.UseSession();
+
 // Add enterprise authentication middleware (before MCP mapping)
 app.UseMiddleware<AuthenticationMiddleware>();
 
@@ -68,6 +83,8 @@ app.MapOAuthEndpoints();
 
 // Map OAuth 2.1 implementation endpoints
 app.MapOAuthImplementationEndpoints();
+
+// WebAuthn endpoints - implementation in progress for Sprint 5
 
 // Map MCP endpoints (creates /mcp endpoint for Streamable HTTP transport)
 app.MapMcp();
