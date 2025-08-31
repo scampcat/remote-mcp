@@ -11,6 +11,7 @@ using Authentication.Interfaces;
 using Authentication.Services;
 using Authentication.Middleware;
 using Authentication.OAuth;
+using Authentication.WebAuthn;
 using Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -37,7 +38,7 @@ builder.Services.AddSingleton<ITokenService, TokenService>();
 builder.Services.AddSingleton<IMultiTenantTokenService, MultiTenantTokenService>();
 builder.Services.AddSingleton<IEnterpriseOAuthPolicyService, EnterpriseOAuthPolicyService>();
 builder.Services.AddSingleton<IClientCertificateService, ClientCertificateService>();
-// WebAuthn service registration - implementation in progress
+builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
 
 // Add session support for WebAuthn challenges
 builder.Services.AddDistributedMemoryCache();
@@ -84,7 +85,8 @@ app.MapOAuthEndpoints();
 // Map OAuth 2.1 implementation endpoints
 app.MapOAuthImplementationEndpoints();
 
-// WebAuthn endpoints - implementation in progress for Sprint 5
+// Map WebAuthn enterprise endpoints
+app.MapWebAuthnEndpoints();
 
 // Map MCP endpoints (creates /mcp endpoint for Streamable HTTP transport)
 app.MapMcp();
