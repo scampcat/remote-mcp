@@ -10,6 +10,7 @@ using Authentication.Configuration;
 using Authentication.Interfaces;
 using Authentication.Services;
 using Authentication.Middleware;
+using Authentication.OAuth;
 using Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -57,6 +58,9 @@ app.UseCors();
 
 // Add enterprise authentication middleware (before MCP mapping)
 app.UseMiddleware<AuthenticationMiddleware>();
+
+// Map OAuth 2.1 discovery endpoints (before MCP endpoints)
+app.MapOAuthEndpoints();
 
 // Map MCP endpoints (creates /mcp endpoint for Streamable HTTP transport)
 app.MapMcp();

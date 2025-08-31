@@ -1,0 +1,245 @@
+using Authentication.Configuration;
+using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Mvc;
+using System.Text.Json;
+
+namespace Authentication.OAuth;
+
+/// <summary>
+/// OAuth 2.1 endpoint implementations following MCP authorization specification.
+/// Implements Protected Resource Metadata (RFC9728) and Authorization Server Metadata (RFC8414).
+/// </summary>
+public static class OAuthEndpoints
+{
+    /// <summary>
+    /// Maps OAuth 2.1 discovery and authorization endpoints to the application.
+    /// </summary>
+    public static void MapOAuthEndpoints(this WebApplication app)
+    {
+        var authConfig = app.Services.GetRequiredService<IOptionsMonitor<AuthenticationConfiguration>>();
+
+        // OAuth 2.0 Protected Resource Metadata (RFC9728) - Required by MCP spec
+        app.MapGet("/.well-known/oauth-protected-resource", 
+            async (HttpContext context) => await GetProtectedResourceMetadataAsync(context, authConfig));
+
+        // OAuth 2.0 Authorization Server Metadata (RFC8414) - Required by MCP spec  
+        app.MapGet("/.well-known/oauth-authorization-server",
+            async (HttpContext context) => await GetAuthorizationServerMetadataAsync(context, authConfig));
+
+        // OpenID Connect Discovery 1.0 compatibility
+        app.MapGet("/.well-known/openid-configuration",
+            async (HttpContext context) => await GetOpenIDConfigurationAsync(context, authConfig));
+
+        // OAuth authorization endpoint (stub for Sprint 2)
+        app.MapGet("/authorize", async (HttpContext context) => 
+        {
+            context.Response.StatusCode = 501;
+            await context.Response.WriteAsync("Authorization endpoint - implementation in progress");
+        });
+
+        // OAuth token endpoint (stub for Sprint 2)
+        app.MapPost("/token", async (HttpContext context) =>
+        {
+            context.Response.StatusCode = 501;
+            await context.Response.WriteAsync("Token endpoint - implementation in progress");
+        });
+
+        // Dynamic client registration endpoint (stub for Sprint 2)
+        app.MapPost("/register", async (HttpContext context) =>
+        {
+            context.Response.StatusCode = 501;
+            await context.Response.WriteAsync("Client registration - implementation in progress");
+        });
+    }
+
+    /// <summary>
+    /// Returns Protected Resource Metadata as required by MCP specification (RFC9728).
+    /// </summary>
+    private static async Task<IResult> GetProtectedResourceMetadataAsync(
+        HttpContext context, 
+        IOptionsMonitor<AuthenticationConfiguration> authConfig)
+    {
+        var config = authConfig.CurrentValue;
+        var baseUrl = GetBaseUrl(context);
+
+        var metadata = new
+        {
+            resource = baseUrl,
+            authorization_servers = new[] { baseUrl },
+            scopes_supported = new[] { "mcp:tools", "mcp:math", "mcp:utility", "mcp:data", "mcp:reflection" },
+            bearer_methods_supported = new[] { "header" },
+            resource_documentation = $"{baseUrl}/info"
+        };
+
+        return Results.Json(metadata);
+    }
+
+    /// <summary>
+    /// Returns Authorization Server Metadata as required by OAuth 2.1 (RFC8414).
+    /// </summary>
+    private static async Task<IResult> GetAuthorizationServerMetadataAsync(
+        HttpContext context,
+        IOptionsMonitor<AuthenticationConfiguration> authConfig)
+    {
+        var config = authConfig.CurrentValue;
+        var baseUrl = GetBaseUrl(context);
+
+        var metadata = new
+        {
+            issuer = baseUrl,
+            authorization_endpoint = $"{baseUrl}/authorize",
+            token_endpoint = $"{baseUrl}/token",
+            registration_endpoint = config.OAuth.EnableDynamicClientRegistration ? $"{baseUrl}/register" : null,
+            jwks_uri = $"{baseUrl}/.well-known/jwks",
+            
+            // OAuth 2.1 required parameters
+            response_types_supported = new[] { "code" },
+            grant_types_supported = new[] { "authorization_code", "refresh_token" },
+            code_challenge_methods_supported = new[] { "S256" },
+            
+            // MCP-specific scopes
+            scopes_supported = new[] { "mcp:tools", "mcp:math", "mcp:utility", "mcp:data", "mcp:reflection" },
+            
+            // Enterprise authentication methods
+            token_endpoint_auth_methods_supported = config.OAuth.RequireClientCertificates 
+                ? new[] { "client_secret_post", "tls_client_auth" }
+                : new[] { "client_secret_post", "none" },
+            
+            // Enterprise security features
+            require_signed_request_object = false,
+            require_pushed_authorization_requests = false,
+            
+            // Enterprise policy information
+            service_documentation = $"{baseUrl}/info",
+            ui_locales_supported = new[] { "en-US" },
+            
+            // Enterprise compliance
+            claims_supported = new[] { "sub", "aud", "iss", "exp", "iat", "tenant", "roles", "tools" }
+        };
+
+        return Results.Json(metadata);
+    }
+
+    /// <summary>
+    /// Returns OpenID Connect Discovery metadata for compatibility.
+    /// </summary>
+    private static async Task<IResult> GetOpenIDConfigurationAsync(
+        HttpContext context,
+        IOptionsMonitor<AuthenticationConfiguration> authConfig)
+    {
+        var config = authConfig.CurrentValue;
+        var baseUrl = GetBaseUrl(context);
+
+        var metadata = new
+        {
+            issuer = baseUrl,
+            authorization_endpoint = $"{baseUrl}/authorize",
+            token_endpoint = $"{baseUrl}/token",
+            userinfo_endpoint = $"{baseUrl}/userinfo",
+            registration_endpoint = config.OAuth.EnableDynamicClientRegistration ? $"{baseUrl}/register" : null,
+            jwks_uri = $"{baseUrl}/.well-known/jwks",
+            
+            // OpenID Connect required
+            response_types_supported = new[] { "code" },
+            subject_types_supported = new[] { "public" },
+            id_token_signing_alg_values_supported = new[] { config.OAuth.Signing.Algorithm },
+            
+            // OAuth 2.1 compatibility
+            grant_types_supported = new[] { "authorization_code", "refresh_token" },
+            code_challenge_methods_supported = new[] { "S256" },
+            
+            // Enterprise claims
+            claims_supported = new[] { "sub", "aud", "iss", "exp", "iat", "tenant", "roles", "tools", "email", "name" },
+            
+            // Enterprise scopes
+            scopes_supported = new[] { "openid", "profile", "email", "mcp:tools" }
+        };
+
+        return Results.Json(metadata);
+    }
+
+    /// <summary>
+    /// Extracts base URL for metadata generation.
+    /// </summary>
+    private static string GetBaseUrl(HttpContext context)
+    {
+        var scheme = context.Request.Scheme;
+        var host = context.Request.Host.ToString();
+        return $"{scheme}://{host}";
+    }
+}
+
+/// <summary>
+/// OAuth 2.1 models for enterprise authentication.
+/// </summary>
+public static class OAuthModels
+{
+    /// <summary>
+    /// Client registration request model for dynamic client registration.
+    /// </summary>
+    public class ClientRegistrationRequest
+    {
+        public string ClientName { get; set; } = string.Empty;
+        public string[] RedirectUris { get; set; } = Array.Empty<string>();
+        public string[] GrantTypes { get; set; } = { "authorization_code" };
+        public string[] ResponseTypes { get; set; } = { "code" };
+        public string TokenEndpointAuthMethod { get; set; } = "none";
+        public string[] Scope { get; set; } = { "mcp:tools" };
+    }
+
+    /// <summary>
+    /// Client registration response model.
+    /// </summary>
+    public class ClientRegistrationResponse
+    {
+        public string ClientId { get; set; } = string.Empty;
+        public string? ClientSecret { get; set; }
+        public long ClientIdIssuedAt { get; set; }
+        public long? ClientSecretExpiresAt { get; set; }
+        public string[] RedirectUris { get; set; } = Array.Empty<string>();
+        public string[] GrantTypes { get; set; } = Array.Empty<string>();
+        public string[] ResponseTypes { get; set; } = Array.Empty<string>();
+        public string ClientName { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Authorization request model for OAuth flow.
+    /// </summary>
+    public class AuthorizationRequest
+    {
+        public string ResponseType { get; set; } = "code";
+        public string ClientId { get; set; } = string.Empty;
+        public string RedirectUri { get; set; } = string.Empty;
+        public string? Scope { get; set; }
+        public string? State { get; set; }
+        public string? CodeChallenge { get; set; }
+        public string? CodeChallengeMethod { get; set; }
+        public string? Resource { get; set; } // RFC8707 Resource Indicators
+    }
+
+    /// <summary>
+    /// Token request model for OAuth code exchange.
+    /// </summary>
+    public class TokenRequest
+    {
+        public string GrantType { get; set; } = "authorization_code";
+        public string Code { get; set; } = string.Empty;
+        public string RedirectUri { get; set; } = string.Empty;
+        public string ClientId { get; set; } = string.Empty;
+        public string? ClientSecret { get; set; }
+        public string? CodeVerifier { get; set; } // PKCE
+        public string? Resource { get; set; } // RFC8707 Resource Indicators
+    }
+
+    /// <summary>
+    /// Token response model for OAuth token issuance.
+    /// </summary>
+    public class TokenResponse
+    {
+        public string AccessToken { get; set; } = string.Empty;
+        public string TokenType { get; set; } = "Bearer";
+        public int ExpiresIn { get; set; }
+        public string? RefreshToken { get; set; }
+        public string? Scope { get; set; }
+    }
+}
