@@ -39,6 +39,8 @@ builder.Services.AddSingleton<IMultiTenantTokenService, MultiTenantTokenService>
 builder.Services.AddSingleton<IEnterpriseOAuthPolicyService, EnterpriseOAuthPolicyService>();
 builder.Services.AddSingleton<IClientCertificateService, ClientCertificateService>();
 builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
+builder.Services.AddSingleton<IPasswordlessAIAuthFlow, PasswordlessAIAuthFlow>();
+builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
 
 // Add session support for WebAuthn challenges
 builder.Services.AddDistributedMemoryCache();
