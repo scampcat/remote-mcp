@@ -9,6 +9,20 @@
 
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.AspNetCore" Version="0.3.0-preview.4" />
+    
+    <!-- Enterprise Authentication Packages -->
+    <PackageReference Include="OpenIddict.AspNetCore" Version="5.1.0" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="5.1.0" />
+    <PackageReference Include="Fido2" Version="3.0.1" />
+    
+    <!-- Enterprise Database and Configuration -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="9.0.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Caching.StackExchangeRedis" Version="9.0.0" />
+    
+    <!-- Enterprise Security and Monitoring -->
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.0" />
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.1.2" />
   </ItemGroup>
 
   <ItemGroup>
