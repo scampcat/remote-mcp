@@ -33,6 +33,7 @@ builder.Services.Configure<AuthenticationConfiguration>(
 
 // Register authentication services following SOLID principles
 builder.Services.AddSingleton<IAuthenticationModeProvider, AuthenticationModeProvider>();
+builder.Services.AddSingleton<ITokenService, TokenService>();
 
 // Configure authentication database (in-memory for development)
 builder.Services.AddDbContext<AuthDbContext>(options =>
@@ -61,6 +62,9 @@ app.UseMiddleware<AuthenticationMiddleware>();
 
 // Map OAuth 2.1 discovery endpoints (before MCP endpoints)
 app.MapOAuthEndpoints();
+
+// Map OAuth 2.1 implementation endpoints
+app.MapOAuthImplementationEndpoints();
 
 // Map MCP endpoints (creates /mcp endpoint for Streamable HTTP transport)
 app.MapMcp();

@@ -20,42 +20,23 @@ public static class OAuthEndpoints
 
         // OAuth 2.0 Protected Resource Metadata (RFC9728) - Required by MCP spec
         app.MapGet("/.well-known/oauth-protected-resource", 
-            async (HttpContext context) => await GetProtectedResourceMetadataAsync(context, authConfig));
+            (HttpContext context) => GetProtectedResourceMetadata(context, authConfig));
 
         // OAuth 2.0 Authorization Server Metadata (RFC8414) - Required by MCP spec  
         app.MapGet("/.well-known/oauth-authorization-server",
-            async (HttpContext context) => await GetAuthorizationServerMetadataAsync(context, authConfig));
+            (HttpContext context) => GetAuthorizationServerMetadata(context, authConfig));
 
         // OpenID Connect Discovery 1.0 compatibility
         app.MapGet("/.well-known/openid-configuration",
-            async (HttpContext context) => await GetOpenIDConfigurationAsync(context, authConfig));
+            (HttpContext context) => GetOpenIDConfiguration(context, authConfig));
 
-        // OAuth authorization endpoint (stub for Sprint 2)
-        app.MapGet("/authorize", async (HttpContext context) => 
-        {
-            context.Response.StatusCode = 501;
-            await context.Response.WriteAsync("Authorization endpoint - implementation in progress");
-        });
-
-        // OAuth token endpoint (stub for Sprint 2)
-        app.MapPost("/token", async (HttpContext context) =>
-        {
-            context.Response.StatusCode = 501;
-            await context.Response.WriteAsync("Token endpoint - implementation in progress");
-        });
-
-        // Dynamic client registration endpoint (stub for Sprint 2)
-        app.MapPost("/register", async (HttpContext context) =>
-        {
-            context.Response.StatusCode = 501;
-            await context.Response.WriteAsync("Client registration - implementation in progress");
-        });
+        // OAuth endpoint stubs removed - implemented in OAuthImplementation.cs
     }
 
     /// <summary>
     /// Returns Protected Resource Metadata as required by MCP specification (RFC9728).
     /// </summary>
-    private static async Task<IResult> GetProtectedResourceMetadataAsync(
+    private static IResult GetProtectedResourceMetadata(
         HttpContext context, 
         IOptionsMonitor<AuthenticationConfiguration> authConfig)
     {
@@ -77,7 +58,7 @@ public static class OAuthEndpoints
     /// <summary>
     /// Returns Authorization Server Metadata as required by OAuth 2.1 (RFC8414).
     /// </summary>
-    private static async Task<IResult> GetAuthorizationServerMetadataAsync(
+    private static IResult GetAuthorizationServerMetadata(
         HttpContext context,
         IOptionsMonitor<AuthenticationConfiguration> authConfig)
     {
@@ -123,7 +104,7 @@ public static class OAuthEndpoints
     /// <summary>
     /// Returns OpenID Connect Discovery metadata for compatibility.
     /// </summary>
-    private static async Task<IResult> GetOpenIDConfigurationAsync(
+    private static IResult GetOpenIDConfiguration(
         HttpContext context,
         IOptionsMonitor<AuthenticationConfiguration> authConfig)
     {
