@@ -34,6 +34,9 @@ builder.Services.Configure<AuthenticationConfiguration>(
 // Register authentication services following SOLID principles
 builder.Services.AddSingleton<IAuthenticationModeProvider, AuthenticationModeProvider>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
+builder.Services.AddSingleton<IMultiTenantTokenService, MultiTenantTokenService>();
+builder.Services.AddSingleton<IEnterpriseOAuthPolicyService, EnterpriseOAuthPolicyService>();
+builder.Services.AddSingleton<IClientCertificateService, ClientCertificateService>();
 
 // Configure authentication database (in-memory for development)
 builder.Services.AddDbContext<AuthDbContext>(options =>
