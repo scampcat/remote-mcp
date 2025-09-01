@@ -42,7 +42,17 @@ builder.Services.AddSingleton<IEnterpriseOAuthPolicyService, EnterpriseOAuthPoli
 builder.Services.AddSingleton<IClientCertificateService, ClientCertificateService>();
 builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
 builder.Services.AddSingleton<IPasswordlessAIAuthFlow, PasswordlessAIAuthFlow>();
-builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
+
+// Register external identity provider services
+builder.Services.AddHttpClient<IAzureADTokenValidator, AzureADTokenValidator>();
+
+// Register OAuth endpoint providers following SOLID principles
+builder.Services.AddSingleton<IOAuthEndpointProvider, LocalOAuthEndpointProvider>();
+builder.Services.AddSingleton<IOAuthEndpointProvider, AzureADOAuthEndpointProvider>();
+builder.Services.AddSingleton<IOAuthEndpointProviderFactory, OAuthEndpointProviderFactory>();
+
+// Register rate limiting service
+builder.Services.AddSingleton<IRateLimitingService, RateLimitingService>();
 
 // Add session support for WebAuthn challenges  
 builder.Services.AddDistributedMemoryCache();
@@ -80,7 +90,8 @@ app.UseCors();
 // Add session support for WebAuthn challenges
 app.UseSession();
 
-// Add enterprise authentication middleware (before MCP mapping)
+// Add enterprise security middleware (before MCP mapping)  
+app.UseMiddleware<RateLimitingMiddleware>();
 app.UseMiddleware<AuthenticationMiddleware>();
 
 // Map OAuth 2.1 discovery endpoints (before MCP endpoints)
