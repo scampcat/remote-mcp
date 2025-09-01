@@ -50,6 +50,9 @@ public class AuthenticationMiddleware
             // Extract authentication request context
             var authRequest = await CreateAuthenticationRequestAsync(context);
             
+            _logger.LogInformation("MCP authentication attempt from {IP} with token: {HasToken}", 
+                context.Connection.RemoteIpAddress, !string.IsNullOrEmpty(authRequest.BearerToken));
+            
             // Validate authentication
             var authResult = await _authProvider.AuthenticateAsync(authRequest);
             

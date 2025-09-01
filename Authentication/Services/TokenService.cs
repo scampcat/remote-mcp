@@ -20,6 +20,7 @@ public interface ITokenService
     Task<ClaimsPrincipal?> ValidateTokenAsync(string token);
     Task<bool> RevokeTokenAsync(string tokenId);
     Task<bool> IsTokenRevokedAsync(string tokenId);
+    Task<object> GetJWKSAsync();
 }
 
 /// <summary>
@@ -246,11 +247,78 @@ public class TokenService : ITokenService
     }
 
     /// <summary>
+    /// Returns JWKS (JSON Web Key Set) for enterprise token validation.
+    /// </summary>
+    public async Task<object> GetJWKSAsync()
+    {
+        try
+        {
+            _logger.LogDebug("Generating JWKS from signing key");
+            
+            if (SigningKey is not RsaSecurityKey rsaKey)
+            {
+                _logger.LogError("Signing key is not RSA type: {KeyType}", SigningKey.GetType());
+                return new { keys = new object[] { } };
+            }
+
+            RSA rsa;
+            if (rsaKey.Rsa != null)
+            {
+                rsa = rsaKey.Rsa;
+            }
+            else if (rsaKey.Parameters.Modulus != null)
+            {
+                rsa = RSA.Create();
+                rsa.ImportParameters(rsaKey.Parameters);
+            }
+            else
+            {
+                _logger.LogError("RSA key has no Rsa instance or Parameters");
+                return new { keys = new object[] { } };
+            }
+
+            var parameters = rsa.ExportParameters(false);
+            
+            if (parameters.Modulus == null || parameters.Exponent == null)
+            {
+                _logger.LogError("RSA parameters are null");
+                return new { keys = new object[] { } };
+            }
+
+            // Convert RSA parameters to Base64URL encoding
+            var n = Convert.ToBase64String(parameters.Modulus)
+                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+            var e = Convert.ToBase64String(parameters.Exponent)
+                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+
+            var jwk = new
+            {
+                kty = "RSA",
+                use = "sig",
+                kid = rsaKey.KeyId ?? "enterprise-signing-key",
+                alg = "RS256",
+                n = n,
+                e = e
+            };
+
+            _logger.LogInformation("Generated JWKS with key ID {KeyId}, modulus length {ModulusLength}", 
+                jwk.kid, parameters.Modulus.Length);
+
+            return new { keys = new[] { jwk } };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to generate JWKS: {Message}", ex.Message);
+            return new { keys = new object[] { } };
+        }
+    }
+
+    /// <summary>
     /// Creates consistent RSA signing key for enterprise token security.
     /// </summary>
     private static SecurityKey CreateConsistentSigningKey()
     {
-        // For development, use a deterministic key (in production, this would come from enterprise HSM)
+        // For development, use a simple RSA key (in production, this would come from enterprise HSM)
         var rsa = RSA.Create(2048);
         
         // Create key with consistent ID for JWT validation

@@ -44,6 +44,15 @@ public static class OAuthImplementation
 
         // Dynamic Client Registration endpoint
         app.MapClientRegistrationEndpoint();
+
+        // JWKS endpoint for token validation
+        app.MapGet("/.well-known/jwks", async (ITokenService tokenService, ILogger<ITokenService> logger) =>
+        {
+            logger.LogInformation("JWKS endpoint called");
+            var jwks = await tokenService.GetJWKSAsync();
+            logger.LogInformation("JWKS generated successfully");
+            return Results.Json(jwks);
+        });
     }
 
     /// <summary>
@@ -168,6 +177,9 @@ public static class OAuthImplementation
     {
         try
         {
+            logger.LogInformation("Token endpoint called from {IP} with Content-Type: {ContentType}", 
+                context.Connection.RemoteIpAddress, context.Request.ContentType);
+
             // Validate Content-Type per OAuth 2.1 specification (RFC 6749)
             if (!context.Request.HasFormContentType || 
                 !context.Request.ContentType!.StartsWith("application/x-www-form-urlencoded"))
