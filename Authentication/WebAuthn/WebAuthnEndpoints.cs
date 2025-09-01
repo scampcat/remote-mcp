@@ -14,6 +14,9 @@ public static class WebAuthnEndpoints
     /// </summary>
     public static void MapWebAuthnEndpoints(this WebApplication app)
     {
+        // WebAuthn registration page
+        app.MapGet("/webauthn/register", () => Results.Content(CreateRegistrationPage(), "text/html"));
+        
         // WebAuthn registration endpoints
         app.MapPost("/webauthn/register/begin", BeginRegistration);
         app.MapPost("/webauthn/register/complete", CompleteRegistration);
@@ -221,6 +224,177 @@ public static class WebAuthnEndpoints
         {
             return Results.Problem("Error revoking credential");
         }
+    }
+
+    /// <summary>
+    /// Creates HTML registration page for WebAuthn.
+    /// </summary>
+    private static string CreateRegistrationPage()
+    {
+        return @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebAuthn Registration</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css' rel='stylesheet'>
+    <style>
+        body { background-color: #f8f9fa; }
+        .main-container { max-width: 700px; margin: 50px auto; }
+        .card { box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); border: none; }
+        .btn-register { background: linear-gradient(45deg, #28a745, #20c997); border: none; }
+        .btn-register:hover { background: linear-gradient(45deg, #218838, #1ba085); }
+        .step-indicator { border-left: 4px solid #007bff; }
+        .icon-large { font-size: 1.5rem; }
+    </style>
+</head>
+<body>
+    <div class='main-container'>
+        <div class='text-center mb-4'>
+            <h1 class='display-5'><i class='bi bi-shield-lock icon-large'></i> WebAuthn Registration</h1>
+            <p class='lead'>Secure biometric and security key authentication</p>
+        </div>
+        
+        <div class='card mb-4'>
+            <div class='card-body bg-primary text-white'>
+                <h5 class='card-title'><i class='bi bi-info-circle'></i> Register your biometric or security key</h5>
+                <p class='card-text mb-0'>Enable passwordless authentication using your fingerprint, face recognition, or hardware security key (YubiKey, etc.) for OAuth flows.</p>
+            </div>
+        </div>
+
+        <div class='card mb-4'>
+            <div class='card-body step-indicator'>
+                <h5 class='card-title'><i class='bi bi-1-circle'></i> Step 1: Enter your details</h5>
+                
+                <div class='mb-3'>
+                    <label for='userId' class='form-label'><i class='bi bi-person'></i> User ID (email):</label>
+                    <input type='text' class='form-control' id='userId' value='test.user@company.com' placeholder='Enter your user ID' />
+                </div>
+                
+                <div class='mb-3'>
+                    <label for='displayName' class='form-label'><i class='bi bi-tag'></i> Display Name:</label>
+                    <input type='text' class='form-control' id='displayName' value='Test User' placeholder='Enter display name' />
+                </div>
+                
+                <button id='registerBtn' class='btn btn-register btn-lg w-100' onclick='registerCredential()'>
+                    <i class='bi bi-shield-plus'></i> Register WebAuthn Credential
+                </button>
+            </div>
+        </div>
+
+        <div id='messages'></div>
+
+        <div class='card'>
+            <div class='card-body'>
+                <h5 class='card-title'><i class='bi bi-list-check'></i> Instructions</h5>
+                <ul class='list-unstyled'>
+                    <li class='mb-2'><i class='bi bi-check-circle text-success'></i> Make sure your browser supports WebAuthn (Chrome, Firefox, Safari, Edge)</li>
+                    <li class='mb-2'><i class='bi bi-fingerprint text-primary'></i> For biometrics: Ensure your device has fingerprint/face recognition enabled</li>
+                    <li class='mb-2'><i class='bi bi-key text-warning'></i> For security keys: Have your YubiKey or other FIDO2 device ready</li>
+                    <li class='mb-0'><i class='bi bi-shield-check text-info'></i> After registration, you can use this credential in OAuth authentication flows</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function registerCredential() {
+            const messageDiv = document.getElementById('messages');
+            const registerBtn = document.getElementById('registerBtn');
+            
+            messageDiv.innerHTML = '';
+            registerBtn.disabled = true;
+            registerBtn.innerHTML = '<i class=""bi bi-hourglass-split""></i> Registering...';
+            
+            try {
+                if (!window.PublicKeyCredential) {
+                    throw new Error('WebAuthn is not supported in this browser');
+                }
+                
+                const userId = document.getElementById('userId').value;
+                const displayName = document.getElementById('displayName').value;
+                
+                if (!userId || !displayName) {
+                    throw new Error('Please enter both User ID and Display Name');
+                }
+                
+                // Call WebAuthn registration endpoints
+                const beginResponse = await fetch('/webauthn/register/begin', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: userId,
+                        displayName: displayName,
+                        tenantId: 'default'
+                    })
+                });
+                
+                if (!beginResponse.ok) {
+                    throw new Error('Failed to begin WebAuthn registration');
+                }
+                
+                const credentialCreationOptions = await beginResponse.json();
+                
+                // Convert base64url to ArrayBuffer for WebAuthn API
+                credentialCreationOptions.challenge = Uint8Array.from(
+                    atob(credentialCreationOptions.challenge.replace(/-/g, '+').replace(/_/g, '/')), 
+                    c => c.charCodeAt(0)
+                );
+                credentialCreationOptions.user.id = Uint8Array.from(
+                    atob(credentialCreationOptions.user.id.replace(/-/g, '+').replace(/_/g, '/')), 
+                    c => c.charCodeAt(0)
+                );
+                
+                // Create credential using WebAuthn API
+                const credential = await navigator.credentials.create({
+                    publicKey: credentialCreationOptions
+                });
+                
+                if (!credential) {
+                    throw new Error('No credential created');
+                }
+                
+                // Convert credential response to format server expects
+                const credentialData = {
+                    id: credential.id,
+                    rawId: Array.from(new Uint8Array(credential.rawId)),
+                    response: {
+                        attestationObject: Array.from(new Uint8Array(credential.response.attestationObject)),
+                        clientDataJSON: Array.from(new Uint8Array(credential.response.clientDataJSON))
+                    },
+                    type: credential.type
+                };
+                
+                // Complete registration
+                const completeResponse = await fetch('/webauthn/register/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userId: userId,
+                        tenantId: 'default',
+                        credentialData: credentialData
+                    })
+                });
+                
+                if (!completeResponse.ok) {
+                    const errorText = await completeResponse.text();
+                    throw new Error(`Registration completion failed: ${errorText}`);
+                }
+                
+                const result = await completeResponse.json();
+                messageDiv.innerHTML = '<div class=""alert alert-success""><i class=""bi bi-check-circle""></i> WebAuthn credential registered successfully! You can now use this credential for OAuth authentication.</div>';
+                
+            } catch (error) {
+                console.error('Registration error:', error);
+                messageDiv.innerHTML = `<div class=""alert alert-danger""><i class=""bi bi-exclamation-triangle""></i> Registration failed: ${error.message}</div>`;
+            } finally {
+                registerBtn.disabled = false;
+                registerBtn.innerHTML = '<i class=""bi bi-shield-plus""></i> Register WebAuthn Credential';
+            }
+        }
+    </script>
+</body>
+</html>";
     }
 }
 

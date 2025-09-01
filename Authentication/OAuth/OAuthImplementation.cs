@@ -53,6 +53,42 @@ public static class OAuthImplementation
             logger.LogInformation("JWKS generated successfully");
             return Results.Json(jwks);
         });
+
+        // WebAuthn challenge endpoint for OAuth flow
+        app.MapGet("/webauthn/oauth-challenge", async (HttpContext context,
+            ILogger<ITokenService> logger) =>
+        {
+            try
+            {
+                logger.LogInformation("WebAuthn OAuth challenge requested from {IP}", 
+                    context.Connection.RemoteIpAddress);
+                
+                // Create WebAuthn challenge for OAuth authentication
+                var challenge = new byte[32];
+                using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+                rng.GetBytes(challenge);
+                
+                var challengeOptions = new
+                {
+                    challenge = Convert.ToBase64String(challenge).Replace('+', '-').Replace('/', '_').TrimEnd('='),
+                    timeout = 60000,
+                    rpId = context.Request.Host.Host,
+                    allowCredentials = new object[] { }, // Allow any registered credential
+                    userVerification = "preferred"
+                };
+                
+                // Store challenge in session for later validation
+                context.Session.SetString("webauthn_challenge", Convert.ToBase64String(challenge));
+                
+                logger.LogDebug("Generated WebAuthn challenge for OAuth flow");
+                return Results.Json(challengeOptions);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to generate WebAuthn OAuth challenge");
+                return Results.Problem("Failed to generate WebAuthn challenge");
+            }
+        });
     }
 
     /// <summary>
@@ -113,24 +149,97 @@ public static class OAuthImplementation
         {
             var form = await context.Request.ReadFormAsync();
             
-            var username = form["username"].ToString();
-            var password = form["password"].ToString();
             var clientId = form["client_id"].ToString();
             var redirectUri = form["redirect_uri"].ToString();
             var state = form["state"].ToString();
             var codeChallenge = form["code_challenge"].ToString();
+            var authMethod = form["auth_method"].ToString();
 
-            // Simple authentication for development (enterprise will integrate with IdP)
-            if (IsValidTestUser(username, password))
+            logger.LogInformation("OAuth authorization attempt: method={Method}, client={Client}", 
+                authMethod, clientId);
+
+            string authenticatedUserId = null;
+
+            // Handle different authentication methods
+            if (authMethod == "password")
             {
-                // Create authorization code
+                // Password authentication
+                var username = form["username"].ToString();
+                var password = form["password"].ToString();
+                
+                if (IsValidTestUser(username, password))
+                {
+                    authenticatedUserId = username;
+                    logger.LogInformation("Password authentication successful for user {User}", username);
+                }
+                else
+                {
+                    logger.LogWarning("Password authentication failed for user {User}", username);
+                    return Results.Unauthorized();
+                }
+            }
+            else if (authMethod == "webauthn")
+            {
+                // WebAuthn authentication
+                var webauthnDataJson = form["webauthn_data"].ToString();
+                
+                if (string.IsNullOrEmpty(webauthnDataJson))
+                {
+                    logger.LogWarning("WebAuthn authentication attempted but no credential data provided");
+                    return Results.BadRequest("WebAuthn credential data required");
+                }
+
+                try
+                {
+                    var webauthnData = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(webauthnDataJson);
+                    
+                    // Get stored challenge from session
+                    var storedChallenge = context.Session.GetString("webauthn_challenge");
+                    if (string.IsNullOrEmpty(storedChallenge))
+                    {
+                        logger.LogWarning("WebAuthn authentication failed: no challenge in session");
+                        return Results.BadRequest("Invalid WebAuthn session");
+                    }
+
+                    // Basic WebAuthn validation (in real implementation, you'd fully validate the assertion)
+                    if (webauthnData.TryGetProperty("id", out var credentialId) && !string.IsNullOrEmpty(credentialId.GetString()))
+                    {
+                        // For development, associate with test user
+                        authenticatedUserId = "test.user@company.com";
+                        logger.LogInformation("WebAuthn authentication successful for credential {CredentialId}", 
+                            credentialId.GetString()?.Substring(0, 10) + "...");
+                        
+                        // Clear the challenge from session
+                        context.Session.Remove("webauthn_challenge");
+                    }
+                    else
+                    {
+                        logger.LogWarning("WebAuthn authentication failed: invalid credential format");
+                        return Results.BadRequest("Invalid WebAuthn credential");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "WebAuthn authentication failed during credential validation");
+                    return Results.BadRequest("WebAuthn validation failed");
+                }
+            }
+            else
+            {
+                logger.LogWarning("Invalid authentication method: {Method}", authMethod);
+                return Results.BadRequest("Invalid authentication method");
+            }
+
+            // If authentication successful, create authorization code
+            if (!string.IsNullOrEmpty(authenticatedUserId))
+            {
                 var authCode = GenerateAuthorizationCode();
                 
                 // Store code with PKCE challenge (in-memory for development)
                 var codeData = new AuthorizationCodeData
                 {
                     ClientId = clientId,
-                    UserId = username,
+                    UserId = authenticatedUserId,
                     CodeChallenge = codeChallenge,
                     RedirectUri = redirectUri,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
@@ -148,14 +257,14 @@ public static class OAuthImplementation
                     redirectUrl += $"&state={state}";
                 }
 
-                logger.LogInformation("Authorization successful for user {User} client {Client}", 
-                    username, clientId);
+                logger.LogInformation("Multi-method authorization successful: user={User}, method={Method}, client={Client}", 
+                    authenticatedUserId, authMethod, clientId);
 
                 return Results.Redirect(redirectUrl);
             }
             else
             {
-                logger.LogWarning("Authentication failed for user {User}", username);
+                logger.LogWarning("Authentication failed: no authenticated user ID");
                 return Results.Unauthorized();
             }
         }
@@ -376,7 +485,7 @@ public static class OAuthImplementation
     }
 
     /// <summary>
-    /// Creates HTML login form for OAuth authorization.
+    /// Creates HTML login form for OAuth authorization with multi-method authentication.
     /// </summary>
     private static string CreateLoginForm(string clientId, string redirectUri, string state, 
         string codeChallenge, string codeChallengeMethod)
@@ -387,45 +496,128 @@ public static class OAuthImplementation
 <head>
     <title>MCP Server Authentication</title>
     <style>
-        body {{ font-family: Arial, sans-serif; max-width: 400px; margin: 100px auto; padding: 20px; }}
+        body {{ font-family: Arial, sans-serif; max-width: 450px; margin: 50px auto; padding: 20px; }}
         .form-group {{ margin: 15px 0; }}
         label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
-        input {{ width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }}
-        button {{ width: 100%; padding: 10px; background: #007cba; color: white; border: none; border-radius: 4px; cursor: pointer; }}
-        button:hover {{ background: #005a87; }}
-        .info {{ background: #f0f8ff; padding: 10px; border-radius: 4px; margin-bottom: 20px; }}
+        input {{ width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }}
+        button {{ width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px; font-size: 14px; }}
+        .password-btn {{ background: #007cba; color: white; }}
+        .password-btn:hover {{ background: #005a87; }}
+        .webauthn-btn {{ background: #28a745; color: white; }}
+        .webauthn-btn:hover {{ background: #218838; }}
+        .info {{ background: #f0f8ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }}
+        .auth-separator {{ text-align: center; margin: 20px 0; color: #666; font-size: 14px; }}
+        .auth-method {{ border: 1px solid #ddd; padding: 20px; border-radius: 4px; margin-bottom: 15px; background: #fafafa; }}
+        .auth-method h4 {{ margin: 0 0 10px 0; color: #333; }}
+        .auth-method p {{ margin: 10px 0; font-size: 14px; color: #666; }}
+        .biometric-icon {{ font-size: 18px; margin-right: 8px; }}
+        .error {{ background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px; margin: 10px 0; }}
     </style>
 </head>
 <body>
     <div class='info'>
-        <h3>Enterprise MCP Server Authentication</h3>
-        <p>Client: {clientId}</p>
-        <p>Development Mode - Use test credentials</p>
+        <h3>🔐 Enterprise MCP Server Authentication</h3>
+        <p><strong>Client:</strong> {clientId}</p>
+        <p>Choose your preferred authentication method</p>
     </div>
     
-    <form method='post' action='/authorize'>
-        <div class='form-group'>
-            <label for='username'>Username:</label>
-            <input type='text' id='username' name='username' value='test.user@company.com' required />
-        </div>
-        <div class='form-group'>
-            <label for='password'>Password:</label>
-            <input type='password' id='password' name='password' value='testpass' required />
+    <form id='oauth_form' method='post' action='/authorize'>
+        <!-- Password Authentication Method -->
+        <div class='auth-method'>
+            <h4>🔑 Username & Password</h4>
+            <div class='form-group'>
+                <label for='username'>Username:</label>
+                <input type='text' id='username' name='username' value='test.user@company.com' />
+            </div>
+            <div class='form-group'>
+                <label for='password'>Password:</label>
+                <input type='password' id='password' name='password' value='testpass' />
+            </div>
+            <button type='submit' class='password-btn' onclick=""document.getElementById('auth_method').value='password'"">
+                🔑 Sign In with Password
+            </button>
         </div>
         
+        <div class='auth-separator'>─── OR ───</div>
+        
+        <!-- WebAuthn Authentication Method -->
+        <div class='auth-method'>
+            <h4><span class='biometric-icon'>🔐</span>Biometric / Security Key</h4>
+            <p>Use your fingerprint, face recognition, or hardware security key (YubiKey, etc.)</p>
+            <button type='button' class='webauthn-btn' onclick='authenticateWithWebAuthn()'>
+                🔐 Authenticate with Biometric/Security Key
+            </button>
+            <div id='webauthn_error' class='error' style='display:none;'></div>
+        </div>
+        
+        <!-- Hidden fields for OAuth flow -->
         <input type='hidden' name='client_id' value='{clientId}' />
         <input type='hidden' name='redirect_uri' value='{redirectUri}' />
         <input type='hidden' name='state' value='{state}' />
         <input type='hidden' name='code_challenge' value='{codeChallenge}' />
         <input type='hidden' name='code_challenge_method' value='{codeChallengeMethod}' />
-        
-        <button type='submit'>Authorize Access</button>
+        <input type='hidden' id='auth_method' name='auth_method' value='' />
+        <input type='hidden' id='webauthn_data' name='webauthn_data' value='' />
     </form>
     
     <div class='info' style='margin-top: 20px; font-size: 12px;'>
-        <p>Development credentials: test.user@company.com / testpass</p>
+        <p><strong>Password:</strong> test.user@company.com / testpass</p>
+        <p><strong>WebAuthn:</strong> First register at <a href='/webauthn/register' target='_blank'>/webauthn/register</a></p>
         <p>This will grant access to MCP tools for the requesting application.</p>
     </div>
+
+    <script>
+        async function authenticateWithWebAuthn() {{
+            const errorDiv = document.getElementById('webauthn_error');
+            errorDiv.style.display = 'none';
+            
+            try {{
+                // Check WebAuthn support
+                if (!window.PublicKeyCredential) {{
+                    throw new Error('WebAuthn is not supported in this browser');
+                }}
+                
+                // Get challenge from server
+                const challengeResponse = await fetch('/webauthn/oauth-challenge');
+                if (!challengeResponse.ok) {{
+                    throw new Error('Failed to get WebAuthn challenge from server');
+                }}
+                const challengeData = await challengeResponse.json();
+                
+                // Create WebAuthn assertion
+                const credential = await navigator.credentials.get({{
+                    publicKey: challengeData
+                }});
+                
+                if (!credential) {{
+                    throw new Error('No credential returned from authenticator');
+                }}
+                
+                // Convert credential to format server expects
+                const authData = {{
+                    id: credential.id,
+                    rawId: Array.from(new Uint8Array(credential.rawId)),
+                    response: {{
+                        authenticatorData: Array.from(new Uint8Array(credential.response.authenticatorData)),
+                        clientDataJSON: Array.from(new Uint8Array(credential.response.clientDataJSON)),
+                        signature: Array.from(new Uint8Array(credential.response.signature)),
+                        userHandle: credential.response.userHandle ? Array.from(new Uint8Array(credential.response.userHandle)) : null
+                    }},
+                    type: credential.type
+                }};
+                
+                // Submit WebAuthn authentication
+                document.getElementById('webauthn_data').value = JSON.stringify(authData);
+                document.getElementById('auth_method').value = 'webauthn';
+                document.getElementById('oauth_form').submit();
+                
+            }} catch (error) {{
+                console.error('WebAuthn authentication error:', error);
+                errorDiv.textContent = 'WebAuthn authentication failed: ' + error.message + '. Please try password authentication.';
+                errorDiv.style.display = 'block';
+            }}
+        }}
+    </script>
 </body>
 </html>";
     }
