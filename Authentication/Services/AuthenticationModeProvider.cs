@@ -15,14 +15,17 @@ public class AuthenticationModeProvider : IAuthenticationModeProvider
 {
     private readonly ILogger<AuthenticationModeProvider> _logger;
     private readonly IOptionsMonitor<AuthenticationConfiguration> _authConfig;
+    private readonly ITokenService _tokenService;
     private AuthenticationMode _currentMode;
 
     public AuthenticationModeProvider(
         ILogger<AuthenticationModeProvider> logger,
-        IOptionsMonitor<AuthenticationConfiguration> authConfig)
+        IOptionsMonitor<AuthenticationConfiguration> authConfig,
+        ITokenService tokenService)
     {
         _logger = logger;
         _authConfig = authConfig;
+        _tokenService = tokenService;
         _currentMode = _authConfig.CurrentValue.Mode;
         
         // Monitor configuration changes for runtime mode switching
@@ -190,10 +193,26 @@ public class AuthenticationModeProvider : IAuthenticationModeProvider
                 "Bearer realm=\"MCP Server\", scope=\"mcp:tools\"");
         }
 
-        // OAuth token validation will be implemented in next sprint
-        _logger.LogDebug("Authorization server mode token validation for {Tool}", request.RequestedTool);
+        // Validate JWT token using TokenService
+        var principal = await _tokenService.ValidateTokenAsync(request.BearerToken);
         
-        return AuthenticationResult.Failure("OAuth validation not yet implemented", "not_implemented");
+        if (principal == null)
+        {
+            _logger.LogWarning("Invalid or expired token for tool {Tool}", request.RequestedTool);
+            return AuthenticationResult.Failure(
+                "Invalid or expired token",
+                "invalid_token",
+                "Bearer realm=\"MCP Server\", scope=\"mcp:tools\"");
+        }
+
+        _logger.LogDebug("Token validation successful for user {User} accessing tool {Tool}", 
+            principal.Identity?.Name, request.RequestedTool);
+        
+        return AuthenticationResult.Success(principal, new AuthenticationContext
+        {
+            AuthenticationMethod = "oauth_jwt",
+            TenantId = principal.FindFirst("tenant")?.Value ?? "default"
+        });
     }
 
     /// <summary>

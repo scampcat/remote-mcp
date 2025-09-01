@@ -17,10 +17,12 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure logging to stderr (MCP convention)
+// Configure logging to stderr (MCP convention) with UTC timestamps
 builder.Logging.AddConsole(consoleLogOptions =>
 {
     consoleLogOptions.LogToStandardErrorThreshold = LogLevel.Trace;
+    consoleLogOptions.TimestampFormat = "[yyyy-MM-dd HH:mm:ss UTC] ";
+    consoleLogOptions.UseUtcTimestamp = true;
 });
 
 // Register MCP server with HTTP transport (Streamable HTTP)
@@ -42,11 +44,11 @@ builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnServ
 builder.Services.AddSingleton<IPasswordlessAIAuthFlow, PasswordlessAIAuthFlow>();
 builder.Services.AddSingleton<IEnterpriseWebAuthnService, EnterpriseWebAuthnService>();
 
-// Add session support for WebAuthn challenges
+// Add session support for WebAuthn challenges  
 builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSession(options =>
 {
-    options.IdleTimeout = TimeSpan.FromMinutes(10);
+    options.IdleTimeout = TimeSpan.FromHours(8); // Extend for OAuth sessions
     options.Cookie.HttpOnly = true;
     options.Cookie.IsEssential = true;
     options.Cookie.SameSite = SameSiteMode.None;

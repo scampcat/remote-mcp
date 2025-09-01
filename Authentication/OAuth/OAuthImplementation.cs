@@ -8,6 +8,7 @@ using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Collections.Concurrent;
 
 namespace Authentication.OAuth;
 
@@ -40,6 +41,9 @@ public static class OAuthImplementation
             ITokenService tokenService,
             ILogger<ITokenService> logger) =>
             await HandleTokenRequestAsync(context, authConfig, tokenService, logger));
+
+        // Dynamic Client Registration endpoint
+        app.MapClientRegistrationEndpoint();
     }
 
     /// <summary>
@@ -114,14 +118,19 @@ public static class OAuthImplementation
                 var authCode = GenerateAuthorizationCode();
                 
                 // Store code with PKCE challenge (in-memory for development)
-                StoreAuthorizationCode(authCode, new AuthorizationCodeData
+                var codeData = new AuthorizationCodeData
                 {
                     ClientId = clientId,
                     UserId = username,
                     CodeChallenge = codeChallenge,
                     RedirectUri = redirectUri,
                     ExpiresAt = DateTime.UtcNow.AddMinutes(5)
-                });
+                };
+                
+                StoreAuthorizationCode(authCode, codeData);
+                
+                logger.LogDebug("Stored authorization code {Code} with challenge {Challenge} for client {Client}",
+                    authCode, codeChallenge, clientId);
 
                 // Redirect back to client with authorization code
                 var redirectUrl = $"{redirectUri}?code={authCode}";
@@ -159,25 +168,76 @@ public static class OAuthImplementation
     {
         try
         {
+            // Validate Content-Type per OAuth 2.1 specification (RFC 6749)
+            if (!context.Request.HasFormContentType || 
+                !context.Request.ContentType!.StartsWith("application/x-www-form-urlencoded"))
+            {
+                logger.LogWarning("Invalid Content-Type for token endpoint: {ContentType}", 
+                    context.Request.ContentType);
+                return Results.BadRequest(new { 
+                    error = "invalid_request", 
+                    error_description = "Content-Type must be application/x-www-form-urlencoded" 
+                });
+            }
+
             var form = await context.Request.ReadFormAsync();
             
+            // Direct form field extraction preserving actual values
             var grantType = form["grant_type"].ToString();
             var code = form["code"].ToString();
             var redirectUri = form["redirect_uri"].ToString();
             var clientId = form["client_id"].ToString();
             var codeVerifier = form["code_verifier"].ToString();
+            
+            logger.LogDebug("Token exchange request: grant_type={GrantType}, code={Code}, client_id={ClientId}",
+                grantType, code.Substring(0, Math.Min(code.Length, 10)) + "...", clientId);
+            
+            // Form debugging removed for production performance
 
-            if (grantType != "authorization_code")
+            if (grantType == "authorization_code")
             {
+                return await HandleAuthorizationCodeGrantAsync(form, authConfig, tokenService, logger);
+            }
+            else if (grantType == "refresh_token")
+            {
+                return await HandleRefreshTokenGrantAsync(form, authConfig, tokenService, logger);
+            }
+            else
+            {
+                logger.LogWarning("Unsupported grant type: {GrantType}", grantType);
                 return Results.BadRequest(new { error = "unsupported_grant_type" });
             }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error processing token request");
+            return Results.Problem("Token processing error");
+        }
+    }
+
+    /// <summary>
+    /// Handles authorization code grant for initial token issuance.
+    /// </summary>
+    private static async Task<IResult> HandleAuthorizationCodeGrantAsync(
+        IFormCollection form,
+        IOptionsMonitor<AuthenticationConfiguration> authConfig,
+        ITokenService tokenService,
+        ILogger logger)
+    {
+        try
+        {
+            var code = form["code"].ToString();
+            var redirectUri = form["redirect_uri"].ToString();
+            var clientId = form["client_id"].ToString();
+            var codeVerifier = form["code_verifier"].ToString();
 
             // Retrieve and validate authorization code
             var codeData = GetAuthorizationCode(code);
             if (codeData == null)
             {
-                logger.LogWarning("Invalid authorization code {Code}", code);
-                return Results.BadRequest(new { error = "invalid_grant" });
+                logger.LogWarning("Invalid authorization code {Code} - not found in storage. Available codes: {AvailableCodes}", 
+                    code, string.Join(", ", _authCodes.Keys));
+                return Results.BadRequest(new { error = "invalid_grant", error_description = "Authorization code not found" });
             }
 
             if (codeData.ExpiresAt < DateTime.UtcNow)
@@ -190,9 +250,10 @@ public static class OAuthImplementation
             // Validate PKCE
             if (!ValidatePKCE(codeData.CodeChallenge, codeVerifier))
             {
-                logger.LogWarning("PKCE validation failed for code {Code}", code);
+                logger.LogWarning("PKCE validation failed for code {Code}. Challenge: {Challenge}, Verifier: {Verifier}", 
+                    code, codeData.CodeChallenge, codeVerifier);
                 RemoveAuthorizationCode(code);
-                return Results.BadRequest(new { error = "invalid_grant" });
+                return Results.BadRequest(new { error = "invalid_grant", error_description = "PKCE validation failed" });
             }
 
             // Validate client and redirect URI
@@ -234,8 +295,71 @@ public static class OAuthImplementation
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Error processing token request");
-            return Results.Problem("Token processing error");
+            logger.LogError(ex, "Error processing authorization code grant");
+            return Results.Problem("Authorization code processing error");
+        }
+    }
+
+    /// <summary>
+    /// Handles refresh token grant for mcp-remote compatibility.
+    /// </summary>
+    private static async Task<IResult> HandleRefreshTokenGrantAsync(
+        IFormCollection form,
+        IOptionsMonitor<AuthenticationConfiguration> authConfig,
+        ITokenService tokenService,
+        ILogger logger)
+    {
+        try
+        {
+            var refreshToken = form["refresh_token"].ToString();
+            var clientId = form["client_id"].ToString();
+
+            if (string.IsNullOrEmpty(refreshToken))
+            {
+                return Results.BadRequest(new { error = "invalid_request", error_description = "refresh_token is required" });
+            }
+
+            // Validate refresh token
+            var principal = await tokenService.ValidateTokenAsync(refreshToken);
+            if (principal == null)
+            {
+                logger.LogWarning("Invalid refresh token for client {ClientId}", clientId);
+                return Results.BadRequest(new { error = "invalid_grant", error_description = "Invalid refresh token" });
+            }
+
+            // Check if this is actually a refresh token
+            var tokenTypeClaim = principal.FindFirst("token_type")?.Value;
+            if (tokenTypeClaim != "refresh")
+            {
+                logger.LogWarning("Token is not a refresh token for client {ClientId}", clientId);
+                return Results.BadRequest(new { error = "invalid_grant", error_description = "Not a refresh token" });
+            }
+
+            // Issue new access token
+            var accessToken = await tokenService.CreateAccessTokenAsync(
+                principal, clientId, new[] { "mcp:tools" }, "default");
+
+            // Issue new refresh token
+            var newRefreshToken = await tokenService.CreateRefreshTokenAsync(
+                principal, clientId, "default");
+
+            var tokenResponse = new
+            {
+                access_token = accessToken,
+                token_type = "Bearer",
+                expires_in = (int)authConfig.CurrentValue.OAuth.AccessTokenLifetime.TotalSeconds,
+                refresh_token = newRefreshToken,
+                scope = "mcp:tools"
+            };
+
+            logger.LogInformation("Refresh token exchange successful for client {ClientId}", clientId);
+
+            return Results.Json(tokenResponse);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error processing refresh token request");
+            return Results.Problem("Refresh token processing error");
         }
     }
 
@@ -332,7 +456,7 @@ public static class OAuthImplementation
     }
 
     // In-memory storage for development - enterprise will use database
-    private static readonly Dictionary<string, AuthorizationCodeData> _authCodes = new();
+    private static readonly ConcurrentDictionary<string, AuthorizationCodeData> _authCodes = new();
 
     private static void StoreAuthorizationCode(string code, AuthorizationCodeData data)
     {
@@ -346,7 +470,7 @@ public static class OAuthImplementation
 
     private static void RemoveAuthorizationCode(string code)
     {
-        _authCodes.Remove(code);
+        _authCodes.TryRemove(code, out _);
     }
 }
 

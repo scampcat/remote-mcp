@@ -29,8 +29,9 @@ public class TokenService : ITokenService
 {
     private readonly ILogger<TokenService> _logger;
     private readonly IOptionsMonitor<AuthenticationConfiguration> _authConfig;
-    private readonly SecurityKey _signingKey;
     private readonly HashSet<string> _revokedTokens = new(); // In-memory for development
+    private static SecurityKey? _sharedSigningKey; // Shared across all instances
+    private static readonly object _keyLock = new object();
 
     public TokenService(
         ILogger<TokenService> logger,
@@ -38,7 +39,28 @@ public class TokenService : ITokenService
     {
         _logger = logger;
         _authConfig = authConfig;
-        _signingKey = GetOrCreateSigningKey();
+    }
+
+    /// <summary>
+    /// Gets shared signing key across all TokenService instances.
+    /// </summary>
+    private SecurityKey SigningKey
+    {
+        get
+        {
+            if (_sharedSigningKey == null)
+            {
+                lock (_keyLock)
+                {
+                    if (_sharedSigningKey == null)
+                    {
+                        _sharedSigningKey = CreateConsistentSigningKey();
+                        _logger.LogInformation("Created shared signing key for enterprise authentication");
+                    }
+                }
+            }
+            return _sharedSigningKey;
+        }
     }
 
     /// <summary>
@@ -81,7 +103,7 @@ public class TokenService : ITokenService
         {
             Subject = new ClaimsIdentity(claims),
             Expires = expiry,
-            SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256),
+            SigningCredentials = new SigningCredentials(SigningKey, SecurityAlgorithms.RsaSha256),
             Issuer = config.OAuth.Issuer,
             Audience = config.OAuth.Issuer
         };
@@ -126,7 +148,7 @@ public class TokenService : ITokenService
         {
             Subject = new ClaimsIdentity(claims),
             Expires = expiry,
-            SigningCredentials = new SigningCredentials(_signingKey, SecurityAlgorithms.RsaSha256),
+            SigningCredentials = new SigningCredentials(SigningKey, SecurityAlgorithms.RsaSha256),
             Issuer = config.OAuth.Issuer,
             Audience = config.OAuth.Issuer
         };
@@ -169,7 +191,7 @@ public class TokenService : ITokenService
                 ValidAudience = config.OAuth.Issuer,
                 ValidateLifetime = true,
                 ValidateIssuerSigningKey = true,
-                IssuerSigningKey = _signingKey,
+                IssuerSigningKey = SigningKey,
                 ClockSkew = TimeSpan.FromMinutes(5) // Enterprise clock skew tolerance
             };
 
@@ -224,18 +246,18 @@ public class TokenService : ITokenService
     }
 
     /// <summary>
-    /// Gets or creates RSA signing key for enterprise token security.
+    /// Creates consistent RSA signing key for enterprise token security.
     /// </summary>
-    private SecurityKey GetOrCreateSigningKey()
+    private static SecurityKey CreateConsistentSigningKey()
     {
-        // For development, use a generated key
-        // In production, this should come from enterprise key management
+        // For development, use a deterministic key (in production, this would come from enterprise HSM)
         var rsa = RSA.Create(2048);
         
-        // Generate a key for development - in production this would come from enterprise HSM
-        var key = new RsaSecurityKey(rsa);
-        
-        _logger.LogInformation("Token signing key initialized for enterprise authentication");
+        // Create key with consistent ID for JWT validation
+        var key = new RsaSecurityKey(rsa)
+        {
+            KeyId = "enterprise-signing-key"
+        };
         
         return key;
     }
