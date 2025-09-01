@@ -1,16 +1,17 @@
-# Remote MCP Server with Reflection Capabilities
+# Enterprise Remote MCP Server
 
-A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring comprehensive reflection tools for dynamic introspection and self-documentation.
+A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring enterprise authentication, multi-method user authentication, and comprehensive reflection capabilities.
 
-## 🚀 Features
+## ✨ Key Features
 
+- **🔐 Enterprise Authentication**: OAuth 2.1 with multi-method authentication (password + WebAuthn)
+- **🛡️ Biometric Support**: Fingerprint, face recognition, and hardware security keys (YubiKey)
 - **16 Tools** across 4 categories (Math, Utility, Data, Reflection)
-- **Self-Documenting** with 5 powerful reflection tools
-- **Network Ready** - accepts connections from any IP
-- **Production Grade** - built with ASP.NET Core and Kestrel
-- **Universal MCP Client Support** - works with Claude Code, Cursor, VS Code
-- **Comprehensive Error Handling** and validation
-- **Type-Safe Parameters** with rich descriptions
+- **🔍 Self-Documenting** with 5 powerful reflection tools
+- **🌐 Network Ready** - accepts connections from any IP with proper security
+- **⚡ Production Grade** - built with ASP.NET Core and enterprise patterns
+- **🔌 Universal MCP Client Support** - works with Claude Code, Cursor, VS Code
+- **🛠️ Professional UI** - Bootstrap-styled authentication and registration pages
 
 ## 📋 Tool Categories
 
@@ -38,7 +39,7 @@ A production-ready remote Model Context Protocol (MCP) server built with C# and 
 - `SearchTools` - Intelligent keyword search across tool names and descriptions
 - `GetServerMetadata` - Server introspection including .NET version and capabilities
 
-## 🛠 Quick Start
+## 🚀 Quick Start
 
 ### Prerequisites
 - [.NET 9.0 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
@@ -68,7 +69,57 @@ A production-ready remote Model Context Protocol (MCP) server built with C# and 
    dotnet run
    ```
    
-   The server will start on `http://0.0.0.0:3001` and accept connections from any network interface.
+   The server will start on `http://0.0.0.0:3001` with enterprise authentication enabled.
+
+## 🔐 Authentication Setup
+
+### For Testing (Disable Authentication)
+Edit `appsettings.json` to disable authentication for development:
+```json
+{
+  "Authentication": {
+    "Mode": "Disabled"
+  }
+}
+```
+
+### For Production (Enable Authentication)
+Keep the default configuration:
+```json
+{
+  "Authentication": {
+    "Mode": "AuthorizationServer"
+  }
+}
+```
+
+### User Authentication Options
+
+When authentication is enabled, users can choose between:
+
+#### 🔑 **Password Authentication**
+- **Username**: `test.user@company.com`
+- **Password**: `testpass`
+- Works with any browser
+
+#### 🛡️ **WebAuthn Authentication**
+- **Biometric**: Fingerprint, face recognition
+- **Security Keys**: YubiKey, FIDO2 devices
+- **Registration**: Visit `http://localhost:3001/webauthn/register`
+
+## 🌐 Browser Access
+
+### WebAuthn Registration
+Visit `http://localhost:3001/webauthn/register` to:
+- Register biometric credentials
+- Set up hardware security keys
+- Test WebAuthn functionality
+
+### OAuth Authorization Flow
+When connecting Claude Code, you'll see:
+- Professional login interface
+- Choice between password and WebAuthn
+- Clear instructions and error handling
 
 ### Testing the Server
 
@@ -264,6 +315,7 @@ public static class MyCustomTools
 ## 📖 Documentation
 
 - **[CLAUDE.md](./CLAUDE.md)** - Development commands and architecture
+- **[INTEGRATOR_GUIDE.md](./INTEGRATOR_GUIDE.md)** - Configuration, deployment, and customization guide
 - **[Medium Article Series](./Medium_Article.md)** - Step-by-step implementation guide
 
 ## 🔒 Security Considerations
