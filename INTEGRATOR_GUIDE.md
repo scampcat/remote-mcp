@@ -2,6 +2,84 @@
 
 This guide is for engineers and system integrators who need to configure, deploy, and customize the enterprise MCP server.
 
+## ⚠️ **CRITICAL SECURITY NOTICE**
+
+**External Identity Provider Integration Status:**
+
+- ✅ **Azure AD**: Complete production-ready implementation with real JWKS validation
+- ⚠️ **AWS Cognito**: Configuration ready, token validation PLACEHOLDER  
+- ⚠️ **Auth0**: Configuration ready, token validation PLACEHOLDER
+- ⚠️ **LDAP**: Configuration ready, directory authentication PLACEHOLDER
+
+**Production Ready for Azure AD ResourceServer mode** - full JWT validation implemented.
+
+**Production-Ready Features:**
+- ✅ **AuthorizationServer mode**: Full OAuth 2.1 with local user management
+- ✅ **ResourceServer mode with Azure AD**: Real JWT validation with JWKS
+- ✅ **WebAuthn integration**: Complete biometric/security key support  
+- ✅ **Rate limiting**: Enterprise IP-based request throttling
+- ✅ **Hybrid mode**: Fallback between local and Azure AD auth
+- ✅ **Disabled mode**: For development/testing only
+
+## 🚀 **Automated Setup Scripts**
+
+### **Azure AD Integration (Production Ready)**
+
+We provide **automated setup scripts** that handle the complete Azure AD integration:
+
+#### **Prerequisites**
+1. **Azure CLI**: Install from [Microsoft Docs](https://docs.microsoft.com/en-us/cli/azure/install-azure-cli)
+   ```bash
+   # macOS
+   brew install azure-cli
+   
+   # Windows
+   winget install Microsoft.AzureCLI
+   
+   # Linux
+   curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
+   ```
+
+2. **Login to Azure**:
+   ```bash
+   az login
+   ```
+
+#### **Automated Setup Options**
+
+**Option 1: Full Automated Setup (Linux/macOS)**
+```bash
+cd scripts
+./setup-azure-ad.sh
+```
+
+**Option 2: PowerShell Setup (Windows)**
+```powershell
+cd scripts
+.\Setup-AzureAD.ps1  
+```
+
+**Option 3: Interactive Configuration (Cross-Platform)**
+```bash
+cd scripts
+node configure-azure-ad.js
+```
+
+#### **What the Scripts Do**
+- ✅ Create Azure AD app registration with proper scopes
+- ✅ Generate client secret securely
+- ✅ Configure MCP-specific OAuth scopes (mcp:tools, mcp:math, mcp:admin)
+- ✅ Generate complete `appsettings.azuread.json` configuration
+- ✅ Create test scripts for verification
+- ✅ Provide Azure Portal links for admin consent
+
+#### **After Running Setup Script**
+1. **Grant admin consent** in Azure Portal (link provided by script)
+2. **Start server**: `dotnet run --configuration appsettings.azuread.json`
+3. **Test integration**: Run the generated test script
+
+**Result**: Your MCP server is now integrated with Azure AD and validates real tokens with scope-based authorization!
+
 ## 🔧 Configuration Options
 
 ### Authentication Modes
