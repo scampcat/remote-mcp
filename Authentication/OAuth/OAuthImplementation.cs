@@ -1,6 +1,7 @@
 using Authentication.Configuration;
 using Authentication.Services;
 using Authentication.OAuth;
+using Authentication.Interfaces;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Mvc;
@@ -19,28 +20,44 @@ namespace Authentication.OAuth;
 public static class OAuthImplementation
 {
     /// <summary>
-    /// Maps working OAuth authorization and token endpoints.
+    /// Maps working OAuth authorization and token endpoints using provider pattern.
     /// </summary>
     public static void MapOAuthImplementationEndpoints(this WebApplication app)
     {
-        // OAuth authorization endpoint
-        app.MapGet("/authorize", async (HttpContext context, 
-            IOptionsMonitor<AuthenticationConfiguration> authConfig,
-            ILogger<ITokenService> logger) => 
-            await HandleAuthorizationRequestAsync(context, authConfig, logger));
+        // OAuth authorization endpoint - GET shows login form or redirects to external provider
+        app.MapGet("/authorize", async (HttpContext context,
+            string response_type, string client_id, string redirect_uri,
+            string? scope, string? state, string? code_challenge, string? code_challenge_method,
+            IOAuthEndpointProviderFactory providerFactory) =>
+        {
+            var provider = providerFactory.GetProvider();
+            return await provider.HandleAuthorizationAsync(response_type, client_id, redirect_uri, 
+                scope, state, code_challenge, code_challenge_method, context);
+        });
 
+        // OAuth authorization endpoint - POST processes local authentication
         app.MapPost("/authorize", async (HttpContext context,
             IOptionsMonitor<AuthenticationConfiguration> authConfig,
             ITokenService tokenService,
             ILogger<ITokenService> logger) =>
             await HandleAuthorizationPostAsync(context, authConfig, tokenService, logger));
 
-        // OAuth token endpoint  
+        // OAuth token endpoint - delegates to appropriate provider
         app.MapPost("/token", async (HttpContext context,
-            IOptionsMonitor<AuthenticationConfiguration> authConfig,
-            ITokenService tokenService,
-            ILogger<ITokenService> logger) =>
-            await HandleTokenRequestAsync(context, authConfig, tokenService, logger));
+            IOAuthEndpointProviderFactory providerFactory) =>
+        {
+            var form = await context.Request.ReadFormAsync();
+            var grant_type = form["grant_type"].ToString();
+            var code = form["code"].ToString();
+            var redirect_uri = form["redirect_uri"].ToString();
+            var client_id = form["client_id"].ToString();
+            var client_secret = form["client_secret"].ToString();
+            var code_verifier = form["code_verifier"].ToString();
+            
+            var provider = providerFactory.GetProvider();
+            return await provider.HandleTokenAsync(grant_type, code, redirect_uri, client_id,
+                client_secret, code_verifier, context);
+        });
 
         // Dynamic Client Registration endpoint
         app.MapClientRegistrationEndpoint();
@@ -53,6 +70,50 @@ public static class OAuthImplementation
             logger.LogInformation("JWKS generated successfully");
             return Results.Json(jwks);
         });
+
+        // OAuth token revocation endpoint (RFC 7009)
+        app.MapPost("/revoke", async (HttpContext context, ITokenService tokenService, ILogger<ITokenService> logger) =>
+        {
+            try
+            {
+                var form = await context.Request.ReadFormAsync();
+                var token = form["token"].ToString();
+                var tokenTypeHint = form["token_type_hint"].ToString();
+                
+                if (string.IsNullOrEmpty(token))
+                {
+                    return Results.BadRequest(new { error = "invalid_request", error_description = "token parameter is required" });
+                }
+
+                // Extract token ID for revocation
+                var tokenId = ExtractTokenId(token);
+                if (string.IsNullOrEmpty(tokenId))
+                {
+                    logger.LogWarning("Could not extract token ID for revocation");
+                    return Results.BadRequest(new { error = "invalid_token", error_description = "Token format invalid" });
+                }
+
+                var revoked = await tokenService.RevokeTokenAsync(tokenId);
+                
+                if (revoked)
+                {
+                    logger.LogInformation("Token successfully revoked for logout");
+                    return Results.Ok(new { message = "Token revoked successfully" });
+                }
+                else
+                {
+                    logger.LogWarning("Token revocation failed - token may not exist");
+                    return Results.Ok(new { message = "Token revocation processed" }); // RFC 7009: return success even if token doesn't exist
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Error during token revocation");
+                return Results.Problem("Token revocation failed");
+            }
+        });
+
+        // Note: /logout endpoint is now in OAuthEndpoints.cs to avoid conflicts
 
         // WebAuthn challenge endpoint for OAuth flow
         app.MapGet("/webauthn/oauth-challenge", async (HttpContext context,
@@ -339,7 +400,7 @@ public static class OAuthImplementation
     /// <summary>
     /// Handles authorization code grant for initial token issuance.
     /// </summary>
-    private static async Task<IResult> HandleAuthorizationCodeGrantAsync(
+    public static async Task<IResult> HandleAuthorizationCodeGrantAsync(
         IFormCollection form,
         IOptionsMonitor<AuthenticationConfiguration> authConfig,
         ITokenService tokenService,
@@ -424,7 +485,7 @@ public static class OAuthImplementation
     /// <summary>
     /// Handles refresh token grant for mcp-remote compatibility.
     /// </summary>
-    private static async Task<IResult> HandleRefreshTokenGrantAsync(
+    public static async Task<IResult> HandleRefreshTokenGrantAsync(
         IFormCollection form,
         IOptionsMonitor<AuthenticationConfiguration> authConfig,
         ITokenService tokenService,
@@ -487,7 +548,7 @@ public static class OAuthImplementation
     /// <summary>
     /// Creates HTML login form for OAuth authorization with multi-method authentication.
     /// </summary>
-    private static string CreateLoginForm(string clientId, string redirectUri, string state, 
+    public static string CreateLoginForm(string clientId, string redirectUri, string state, 
         string codeChallenge, string codeChallengeMethod)
     {
         return $@"
@@ -495,75 +556,98 @@ public static class OAuthImplementation
 <html>
 <head>
     <title>MCP Server Authentication</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css' rel='stylesheet'>
     <style>
-        body {{ font-family: Arial, sans-serif; max-width: 450px; margin: 50px auto; padding: 20px; }}
-        .form-group {{ margin: 15px 0; }}
-        label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
-        input {{ width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }}
-        button {{ width: 100%; padding: 12px; border: none; border-radius: 4px; cursor: pointer; margin-bottom: 10px; font-size: 14px; }}
-        .password-btn {{ background: #007cba; color: white; }}
-        .password-btn:hover {{ background: #005a87; }}
-        .webauthn-btn {{ background: #28a745; color: white; }}
-        .webauthn-btn:hover {{ background: #218838; }}
-        .info {{ background: #f0f8ff; padding: 15px; border-radius: 4px; margin-bottom: 20px; }}
-        .auth-separator {{ text-align: center; margin: 20px 0; color: #666; font-size: 14px; }}
-        .auth-method {{ border: 1px solid #ddd; padding: 20px; border-radius: 4px; margin-bottom: 15px; background: #fafafa; }}
-        .auth-method h4 {{ margin: 0 0 10px 0; color: #333; }}
-        .auth-method p {{ margin: 10px 0; font-size: 14px; color: #666; }}
-        .biometric-icon {{ font-size: 18px; margin-right: 8px; }}
-        .error {{ background: #f8d7da; color: #721c24; padding: 10px; border-radius: 4px; margin: 10px 0; }}
+        body {{ background-color: #f8f9fa; }}
+        .main-container {{ max-width: 700px; margin: 50px auto; }}
+        .card {{ box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); border: none; }}
+        .btn-password {{ background: linear-gradient(45deg, #007cba, #0056b3); border: none; }}
+        .btn-password:hover {{ background: linear-gradient(45deg, #005a87, #004085); }}
+        .btn-webauthn {{ background: linear-gradient(45deg, #28a745, #20c997); border: none; }}
+        .btn-webauthn:hover {{ background: linear-gradient(45deg, #218838, #1ba085); }}
+        .icon-large {{ font-size: 1.5rem; }}
+        .auth-separator {{ margin: 1.5rem 0; }}
     </style>
 </head>
 <body>
-    <div class='info'>
-        <h3>🔐 Enterprise MCP Server Authentication</h3>
-        <p><strong>Client:</strong> {clientId}</p>
-        <p>Choose your preferred authentication method</p>
-    </div>
-    
-    <form id='oauth_form' method='post' action='/authorize'>
-        <!-- Password Authentication Method -->
-        <div class='auth-method'>
-            <h4>🔑 Username & Password</h4>
-            <div class='form-group'>
-                <label for='username'>Username:</label>
-                <input type='text' id='username' name='username' value='test.user@company.com' />
-            </div>
-            <div class='form-group'>
-                <label for='password'>Password:</label>
-                <input type='password' id='password' name='password' value='testpass' />
-            </div>
-            <button type='submit' class='password-btn' onclick=""document.getElementById('auth_method').value='password'"">
-                🔑 Sign In with Password
-            </button>
+    <div class='container main-container'>
+        <div class='text-center mb-4'>
+            <h2><i class='bi bi-shield-lock icon-large text-primary'></i> Enterprise MCP Server</h2>
+            <p class='text-muted'>Secure authentication for AI tool access</p>
         </div>
         
-        <div class='auth-separator'>─── OR ───</div>
+        <div class='card'>
+            <div class='card-header bg-primary text-white'>
+                <h5 class='card-title mb-0'><i class='bi bi-person-check'></i> Authentication Required</h5>
+            </div>
+            <div class='card-body'>
+                <div class='alert alert-info'>
+                    <strong><i class='bi bi-info-circle'></i> Client:</strong> {clientId}<br>
+                    <small>Choose your preferred authentication method below</small>
+                </div>
+                
+                <form id='oauth_form' method='post' action='/authorize'>
+                    <!-- Password Authentication Method -->
+                    <div class='card mb-3'>
+                        <div class='card-body'>
+                            <h5 class='card-title'><i class='bi bi-key-fill text-primary'></i> Username & Password</h5>
+                            <div class='mb-3'>
+                                <label for='username' class='form-label'>Username:</label>
+                                <input type='text' id='username' name='username' class='form-control' value='test.user@company.com' />
+                            </div>
+                            <div class='mb-3'>
+                                <label for='password' class='form-label'>Password:</label>
+                                <input type='password' id='password' name='password' class='form-control' value='testpass' />
+                            </div>
+                            <button type='submit' class='btn btn-password w-100' onclick=""document.getElementById('auth_method').value='password'"">
+                                <i class='bi bi-key-fill'></i> Sign In with Password
+                            </button>
+                        </div>
+                    </div>
         
-        <!-- WebAuthn Authentication Method -->
-        <div class='auth-method'>
-            <h4><span class='biometric-icon'>🔐</span>Biometric / Security Key</h4>
-            <p>Use your fingerprint, face recognition, or hardware security key (YubiKey, etc.)</p>
-            <button type='button' class='webauthn-btn' onclick='authenticateWithWebAuthn()'>
-                🔐 Authenticate with Biometric/Security Key
-            </button>
-            <div id='webauthn_error' class='error' style='display:none;'></div>
+                    <div class='text-center auth-separator'>
+                        <span class='badge bg-secondary'>OR</span>
+                    </div>
+        
+                    <!-- WebAuthn Authentication Method -->
+                    <div class='card mb-3'>
+                        <div class='card-body'>
+                            <h5 class='card-title'><i class='bi bi-fingerprint text-success'></i> Biometric / Security Key</h5>
+                            <p class='card-text text-muted'>Use your fingerprint, face recognition, or hardware security key (YubiKey, etc.)</p>
+                            <button type='button' class='btn btn-webauthn w-100' onclick='authenticateWithWebAuthn()'>
+                                <i class='bi bi-shield-check'></i> Authenticate with Biometric/Security Key
+                            </button>
+                            <div id='webauthn_error' class='alert alert-danger mt-2' style='display:none;'></div>
+                        </div>
+                    </div>
+        
+                    <!-- Hidden fields for OAuth flow -->
+                    <input type='hidden' name='client_id' value='{clientId}' />
+                    <input type='hidden' name='redirect_uri' value='{redirectUri}' />
+                    <input type='hidden' name='state' value='{state}' />
+                    <input type='hidden' name='code_challenge' value='{codeChallenge}' />
+                    <input type='hidden' name='code_challenge_method' value='{codeChallengeMethod}' />
+                    <input type='hidden' id='auth_method' name='auth_method' value='' />
+                    <input type='hidden' id='webauthn_data' name='webauthn_data' value='' />
+                </form>
+            </div>
         </div>
         
-        <!-- Hidden fields for OAuth flow -->
-        <input type='hidden' name='client_id' value='{clientId}' />
-        <input type='hidden' name='redirect_uri' value='{redirectUri}' />
-        <input type='hidden' name='state' value='{state}' />
-        <input type='hidden' name='code_challenge' value='{codeChallenge}' />
-        <input type='hidden' name='code_challenge_method' value='{codeChallengeMethod}' />
-        <input type='hidden' id='auth_method' name='auth_method' value='' />
-        <input type='hidden' id='webauthn_data' name='webauthn_data' value='' />
-    </form>
-    
-    <div class='info' style='margin-top: 20px; font-size: 12px;'>
-        <p><strong>Password:</strong> test.user@company.com / testpass</p>
-        <p><strong>WebAuthn:</strong> First register at <a href='/webauthn/register' target='_blank'>/webauthn/register</a></p>
-        <p>This will grant access to MCP tools for the requesting application.</p>
+        <div class='card mt-3'>
+            <div class='card-body bg-light'>
+                <h6 class='card-title'><i class='bi bi-info-circle text-info'></i> Development Credentials</h6>
+                <div class='row'>
+                    <div class='col-md-6'>
+                        <small><strong>Password:</strong> test.user@company.com / testpass</small>
+                    </div>
+                    <div class='col-md-6'>
+                        <small><strong>WebAuthn:</strong> <a href='/webauthn/register' target='_blank' class='text-decoration-none'>Register first <i class='bi bi-box-arrow-up-right'></i></a></small>
+                    </div>
+                </div>
+                <small class='text-muted'>This will grant access to MCP tools for the requesting application.</small>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -657,6 +741,101 @@ public static class OAuthImplementation
         var challengeBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(codeVerifier));
         var computedChallenge = Convert.ToBase64String(challengeBytes).Replace("+", "-").Replace("/", "_").TrimEnd('=');
         return computedChallenge == codeChallenge;
+    }
+
+    /// <summary>
+    /// Extracts token ID from JWT for revocation.
+    /// </summary>
+    private static string ExtractTokenId(string token)
+    {
+        try
+        {
+            var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+            var jsonToken = handler.ReadJwtToken(token);
+            return jsonToken.Claims.FirstOrDefault(c => c.Type == "jti")?.Value ?? 
+                   jsonToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value ?? 
+                   "unknown";
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>
+    /// Creates logout page with token revocation functionality.
+    /// </summary>
+    private static string CreateLogoutPage()
+    {
+        return @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Logout - MCP Server</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css' rel='stylesheet'>
+</head>
+<body class='bg-light'>
+    <div class='container' style='max-width: 600px; margin: 100px auto;'>
+        <div class='card text-center'>
+            <div class='card-body p-5'>
+                <i class='bi bi-shield-x text-warning' style='font-size: 4rem;'></i>
+                <h3 class='mt-3'>Logout from MCP Server</h3>
+                <p class='text-muted'>This will revoke your authentication tokens and end your session.</p>
+                
+                <div class='d-grid gap-2 mt-4'>
+                    <button class='btn btn-danger btn-lg' onclick='logout()'>
+                        <i class='bi bi-box-arrow-right'></i> Logout & Revoke Tokens
+                    </button>
+                    <a href='/authorize' class='btn btn-outline-secondary'>
+                        <i class='bi bi-arrow-left'></i> Back to Login
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function logout() {
+            try {
+                // Get current token from localStorage if available
+                const token = localStorage.getItem('mcp_access_token') || 
+                             sessionStorage.getItem('access_token') ||
+                             prompt('Enter your access token to revoke (optional):');
+                
+                if (token) {
+                    const response = await fetch('/revoke', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: `token=${encodeURIComponent(token)}&token_type_hint=access_token`
+                    });
+                    
+                    if (response.ok) {
+                        alert('✅ Token revoked successfully. You are now logged out.');
+                    } else {
+                        alert('⚠️ Logout processed (token may have already expired).');
+                    }
+                } else {
+                    alert('✅ Logout completed (no token to revoke).');
+                }
+                
+                // Clear any stored tokens
+                localStorage.removeItem('mcp_access_token');
+                sessionStorage.removeItem('access_token');
+                
+                // Redirect to login
+                window.location.href = '/authorize?response_type=code&client_id=mcp-client&redirect_uri=' + 
+                    encodeURIComponent(window.location.origin + '/auth/callback') + 
+                    '&code_challenge=placeholder&code_challenge_method=S256';
+                
+            } catch (error) {
+                console.error('Logout error:', error);
+                alert('⚠️ Logout completed with warnings. Check console for details.');
+            }
+        }
+    </script>
+</body>
+</html>";
     }
 
     // In-memory storage for development - enterprise will use database

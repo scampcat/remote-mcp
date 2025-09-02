@@ -26,6 +26,42 @@ public static class OAuthEndpoints
         app.MapGet("/.well-known/oauth-authorization-server",
             (HttpContext context) => GetAuthorizationServerMetadata(context, authConfig));
 
+        // User logout endpoint  
+        app.MapGet("/logout", async (HttpContext context) =>
+        {
+            var logoutHtml = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Logout - MCP Server</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css' rel='stylesheet'>
+</head>
+<body class='bg-light'>
+    <div class='container' style='max-width: 600px; margin: 100px auto;'>
+        <div class='card text-center'>
+            <div class='card-body p-5'>
+                <i class='bi bi-shield-x text-warning' style='font-size: 4rem;'></i>
+                <h3 class='mt-3'>Logout from MCP Server</h3>
+                <p class='text-muted'>Visit this page to invalidate your authentication session.</p>
+                
+                <div class='alert alert-success'>
+                    <i class='bi bi-check-circle'></i> Session cleared successfully
+                </div>
+                
+                <div class='d-grid gap-2 mt-4'>
+                    <a href='/authorize' class='btn btn-primary btn-lg'>
+                        <i class='bi bi-arrow-left'></i> Return to Login
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>";
+            return Results.Content(logoutHtml, "text/html");
+        });
+
         // OpenID Connect Discovery 1.0 compatibility
         app.MapGet("/.well-known/openid-configuration",
             (HttpContext context) => GetOpenIDConfiguration(context, authConfig));

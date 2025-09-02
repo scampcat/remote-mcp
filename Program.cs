@@ -14,6 +14,10 @@ using Authentication.OAuth;
 using Authentication.WebAuthn;
 using Data;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.IdentityModel.Tokens;
+using System.IdentityModel.Tokens.Jwt;
+using Authentication.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -54,6 +58,40 @@ builder.Services.AddSingleton<IOAuthEndpointProviderFactory, OAuthEndpointProvid
 // Register rate limiting service
 builder.Services.AddSingleton<IRateLimitingService, RateLimitingService>();
 
+// Register SOLID key management service
+builder.Services.AddSingleton<ISigningKeyService, SigningKeyService>();
+
+// Add standard ASP.NET Core JWT Bearer authentication (2025 recommended approach)
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        var authConfig = builder.Configuration.GetSection("Authentication").Get<AuthenticationConfiguration>();
+        if (authConfig?.Mode == AuthenticationMode.AuthorizationServer)
+        {
+            // Use SOLID key service to ensure same key for creation and validation
+            var keyService = new SigningKeyService();
+            options.TokenValidationParameters = keyService.GetValidationParameters(
+                authConfig.OAuth.Issuer, 
+                authConfig.OAuth.Issuer);
+            
+            // Token type validation for RFC 9068 compliance
+            options.Events = new JwtBearerEvents
+            {
+                OnTokenValidated = context =>
+                {
+                    var token = context.SecurityToken as JwtSecurityToken;
+                    if (token?.Header?.Typ != "at+jwt")
+                    {
+                        context.Fail("Invalid token type. Expected RFC 9068 compliant access token.");
+                    }
+                    return Task.CompletedTask;
+                }
+            };
+        }
+    });
+
+builder.Services.AddAuthorization();
+
 // Add session support for WebAuthn challenges  
 builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSession(options =>
@@ -92,7 +130,10 @@ app.UseSession();
 
 // Add enterprise security middleware (before MCP mapping)  
 app.UseMiddleware<RateLimitingMiddleware>();
-app.UseMiddleware<AuthenticationMiddleware>();
+
+// Use standard ASP.NET Core authentication/authorization
+app.UseAuthentication();
+app.UseAuthorization();
 
 // Map OAuth 2.1 discovery endpoints (before MCP endpoints)
 app.MapOAuthEndpoints();
@@ -103,8 +144,8 @@ app.MapOAuthImplementationEndpoints();
 // Map WebAuthn enterprise endpoints
 app.MapWebAuthnEndpoints();
 
-// Map MCP endpoints (creates /mcp endpoint for Streamable HTTP transport)
-app.MapMcp();
+// Map MCP endpoints with JWT authorization (creates /mcp endpoint for Streamable HTTP transport)
+app.MapMcp().RequireAuthorization();
 
 // Optional: Add a health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
@@ -125,6 +166,9 @@ app.MapGet("/info", () => Results.Json(new
 
 // Start server - listen on all interfaces for network access
 app.Run("http://0.0.0.0:3001");
+
+// Make Program class accessible for testing  
+public partial class Program { }
 
 /// <summary>
 /// MCP Tools - All classes marked with [McpServerToolType] are automatically registered

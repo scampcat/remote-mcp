@@ -88,7 +88,19 @@ public class AuthenticationMiddleware
     /// </summary>
     private static bool IsMCPRequest(HttpContext context)
     {
-        // MCP requests are POST requests to root path
+        var path = context.Request.Path.Value?.ToLowerInvariant() ?? "";
+        
+        // Exclude OAuth and system endpoints from authentication
+        if (path.StartsWith("/authorize") || path.StartsWith("/token") || 
+            path.StartsWith("/auth/") || path.StartsWith("/.well-known") ||
+            path.StartsWith("/health") || path.StartsWith("/webauthn") ||
+            path.StartsWith("/info") || path.StartsWith("/logout") || 
+            path.StartsWith("/revoke"))
+        {
+            return false;
+        }
+        
+        // Only apply authentication to MCP requests (POST to root)
         return context.Request.Method == "POST" && context.Request.Path == "/";
     }
 
