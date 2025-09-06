@@ -53,9 +53,32 @@ public class ConfigureJwtBearerOptions : IConfigureNamedOptions<JwtBearerOptions
         
         logger.LogCritical("🔧 Applying JWT Bearer configuration");
 
-        // Configure token validation parameters using SigningKeyService
-        var issuer = authConfig.OAuth.Issuer;
-        options.TokenValidationParameters = _signingKeyService.GetValidationParameters(issuer, issuer);
+        // Configure token validation parameters based on authentication provider
+        var authProvider = authConfig.ExternalIdP.Provider;
+        logger.LogCritical("🔧 Detected authentication provider: {Provider}", authProvider);
+        
+        if (authProvider == "AzureAD")
+        {
+            // Use Microsoft Azure AD token validation parameters
+            var azureConfig = authConfig.ExternalIdP.AzureAD;
+            var tokenValidationConfig = authConfig.ExternalIdP.TokenValidation;
+            
+            logger.LogInformation("Configuring JWT Bearer for Microsoft Azure AD token validation");
+            
+            // Set Authority for automatic JWKS discovery - do NOT override TokenValidationParameters
+            options.Authority = azureConfig.Authority;
+            options.Audience = tokenValidationConfig.ValidAudience;
+            
+            // Let Authority handle automatic JWKS discovery and signature validation
+            logger.LogInformation("Using Authority for automatic JWKS discovery: {Authority}", azureConfig.Authority);
+        }
+        else
+        {
+            // Use local token validation parameters (for Local provider)
+            var issuer = authConfig.OAuth.Issuer;
+            logger.LogInformation("Configuring JWT Bearer for local token validation");
+            options.TokenValidationParameters = _signingKeyService.GetValidationParameters(issuer, issuer);
+        }
 
         // Configure RFC 9068 compliance for access tokens with detailed logging
         options.Events = new JwtBearerEvents

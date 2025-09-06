@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Net;
+using System.Net.Http;
 using Authentication.Configuration;
 using Authentication.Interfaces;
 using Microsoft.Extensions.Configuration;
@@ -40,83 +42,41 @@ public static class AuthenticationTools
     }
     /// <summary>
     /// Triggers OAuth 2.1 authentication flow by automatically opening browser.
+    /// Uses session-based authentication for MCP integration.
     /// </summary>
     [McpServerTool]
     [Description("Start OAuth authentication flow - automatically opens browser for user authentication")]
     public static async Task<string> StartOAuthAuthentication(
-        [Description("The redirect URI where the auth code will be sent")] string redirectUri = "",
-        [Description("Random state parameter for CSRF protection")] string state = "",
         [Description("Force interactive authentication: login=force credentials, select_account=show picker, consent=force consent, none=silent")] string prompt = "select_account")
     {
         try
         {
             // Use proper DI service resolution (CLAUDE.md compliant)
             var authConfigMonitor = GetService<IOptionsMonitor<AuthenticationConfiguration>>();
-            var cryptographicService = GetService<ICryptographicUtilityService>();
             
             var authConfig = authConfigMonitor.CurrentValue;
-            var azureConfig = authConfig.ExternalIdP?.AzureAD;
             
-            if (azureConfig == null || string.IsNullOrEmpty(azureConfig.Authority) || string.IsNullOrEmpty(azureConfig.ClientId))
-            {
-                return "❌ Azure AD configuration missing in appsettings.json Authentication:ExternalIdP:AzureAD section";
-            }
+            // Build the local authentication endpoint URL for session-based flow
+            var authUrl = $"http://localhost:3001/auth/login?prompt={prompt}";
 
-            // Use first configured redirect URI if not provided - following enterprise configuration patterns
-            if (string.IsNullOrEmpty(redirectUri))
-            {
-                redirectUri = azureConfig.RedirectUris?.FirstOrDefault();
-                if (string.IsNullOrEmpty(redirectUri))
-                {
-                    return "❌ No redirect URIs configured in appsettings.json Authentication:ExternalIdP:AzureAD:RedirectUris";
-                }
-            }
-
-            // Generate secure state if not provided using cryptographic service
-            if (string.IsNullOrEmpty(state))
-            {
-                var stateBytes = cryptographicService.GenerateSecureRandomBytes(16);
-                state = cryptographicService.ToBase64Url(stateBytes);
-            }
-
-            // Generate PKCE challenge using centralized cryptographic service (OAuth 2.1 requirement)
-            var codeVerifier = cryptographicService.GenerateCodeVerifier();
-            var codeChallenge = cryptographicService.GenerateCodeChallenge(codeVerifier);
-
-            // Build Microsoft OAuth 2.0 authorization URL using explicit variables (CLAUDE.md compliance)
-            var clientId = azureConfig.ClientId;
-            var authority = azureConfig.Authority;
-            var scope = Uri.EscapeDataString("User.Read openid profile");
-            var redirectUriEncoded = Uri.EscapeDataString(redirectUri);
-            
-            var authUrl = $"{authority}/oauth2/v2.0/authorize?" +
-                         $"client_id={clientId}" +
-                         $"&response_type=code" +
-                         $"&redirect_uri={redirectUriEncoded}" +
-                         $"&scope={scope}" +
-                         $"&state={state}" +
-                         $"&code_challenge={codeChallenge}" +
-                         $"&code_challenge_method=S256" +
-                         $"&prompt={prompt}";
-
-            // Automatically open browser
+            // Automatically open browser for session-based authentication
             OpenBrowser(authUrl);
 
             return $@"✅ Authentication flow started!
 
-🌐 Browser opened automatically: {authUrl}
+🌐 Browser opened automatically for session-based authentication
 
-📋 Details:
-   • State: {state}
-   • Code Verifier: {codeVerifier}
-   • Redirect URI: {redirectUri}
-   • Scope: mcp:tools User.Read
+📋 Session Authentication Flow:
+   • Browser will handle OAuth flow
+   • Session cookie will be created upon successful authentication
+   • MCP clients can use the session for API access
+   • Session duration: 8 hours with sliding expiration
 
 🔄 Next steps:
    1. Complete authentication in the opened browser
-   2. Azure AD will show: {GetPromptDescription(prompt)}
-   3. You'll be redirected to: {redirectUri}
-   4. Use the authorization code to get access tokens";
+   2. Browser will show: {GetPromptDescription(prompt)}
+   3. Session will be established automatically
+   4. Use CheckAuthenticationStatus() to verify session";
         }
         catch (Exception ex)
         {
@@ -169,18 +129,25 @@ public static class AuthenticationTools
     {
         try
         {
-            // Test protected endpoint to check auth status
+            // Check authentication status via dedicated endpoint
             using var client = new HttpClient();
-            var response = await client.GetAsync("http://localhost:3001/protected");
+            
+            // Include cookies for session-based authentication
+            var cookieContainer = new System.Net.CookieContainer();
+            var handler = new HttpClientHandler { CookieContainer = cookieContainer };
+            using var sessionClient = new HttpClient(handler);
+            
+            var response = await sessionClient.GetAsync("http://localhost:3001/auth/status");
             
             if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized)
             {
                 return $@"❌ Not authenticated
 
-🔓 Status: No valid authentication token
+🔓 Status: No valid session or authentication token
 🔑 To authenticate, run: StartOAuthAuthentication() or StartWebAuthnRegistration()
 
 Available endpoints:
+• OAuth Login: http://localhost:3001/auth/login
 • OAuth 2.1: http://localhost:3001/authorize
 • WebAuthn: http://localhost:3001/webauthn/register
 • Protected resource: http://localhost:3001/protected";
@@ -190,8 +157,8 @@ Available endpoints:
                 var content = await response.Content.ReadAsStringAsync();
                 return $@"✅ Authenticated successfully!
 
-🔐 Status: Valid authentication token active
-📄 Protected resource response: {content}";
+🔐 Status: Valid session or authentication token active
+📄 Authentication info: {content}";
             }
             else
             {

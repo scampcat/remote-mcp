@@ -8,6 +8,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using System.Reflection;
 using Authentication.Configuration;
+using Authentication.Controllers;
 using Authentication.Interfaces;
 using Authentication.Services;
 using Authentication.Middleware;
@@ -16,11 +17,12 @@ using Authentication.WebAuthn;
 using Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using System.IdentityModel.Tokens.Jwt;
 using Authentication.Models;
 using Services;
-using Authentication.Services;
 using Configuration;
 
 // Handle CLI commands for service management
@@ -153,13 +155,32 @@ builder.Services.AddSingleton<IRateLimitingService, RateLimitingService>();
 builder.Services.AddSingleton<ICryptographicUtilityService, Authentication.Domain.Services.CryptographicUtilityService>();
 builder.Services.AddSingleton<ISigningKeyService, SigningKeyService>();
 
+// Register session management service for MCP and OAuth integration
+builder.Services.AddSingleton<ISessionManagementService, SessionManagementService>();
+
 // Register OAuth endpoint provider services
 builder.Services.AddScoped<SimpleOAuthEndpointProvider>();
 builder.Services.AddScoped<LocalOAuthEndpointProvider>();
 builder.Services.AddScoped<IOAuthEndpointProviderFactory, OAuthEndpointProviderFactory>();
 
-// Add standard ASP.NET Core JWT Bearer authentication using SigningKeyService
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+// Add multi-scheme authentication: Cookie + JWT Bearer
+builder.Services.AddAuthentication(options =>
+    {
+        // Set default scheme to Cookie for browser requests
+        options.DefaultScheme = CookieAuthenticationDefaults.AuthenticationScheme;
+        options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddCookie(CookieAuthenticationDefaults.AuthenticationScheme, options =>
+    {
+        options.LoginPath = "/auth/login";
+        options.LogoutPath = "/auth/logout";
+        options.ExpireTimeSpan = TimeSpan.FromHours(8);
+        options.SlidingExpiration = true;
+        options.Cookie.Name = "mcp-session";
+        options.Cookie.HttpOnly = true;
+        options.Cookie.SameSite = SameSiteMode.Lax;
+        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+    })
     .AddJwtBearer(JwtBearerDefaults.AuthenticationScheme, options =>
     {
         // Configuration will be completed by ConfigureJwtBearerOptions below
@@ -168,7 +189,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
 // Configure JWT Bearer options using proper IConfigureNamedOptions pattern
 builder.Services.ConfigureOptions<ConfigureJwtBearerOptions>();
 
-builder.Services.AddAuthorization();
+// Add authorization with multi-scheme policy for MCP access
+builder.Services.AddAuthorization(options =>
+{
+    // Create composite policy supporting both Cookie and JWT Bearer authentication
+    options.AddPolicy("McpAccess", policy =>
+    {
+        policy.AuthenticationSchemes.Add(CookieAuthenticationDefaults.AuthenticationScheme);
+        policy.AuthenticationSchemes.Add(JwtBearerDefaults.AuthenticationScheme);
+        policy.RequireAuthenticatedUser();
+    });
+    
+    // Keep default policy for other endpoints
+    options.DefaultPolicy = new AuthorizationPolicyBuilder()
+        .RequireAuthenticatedUser()
+        .Build();
+});
 
 // Add session support for OAuth and WebAuthn  
 builder.Services.AddDistributedMemoryCache();
@@ -229,12 +265,26 @@ app.MapOAuthEndpoints();
 app.MapOAuthImplementationEndpoints();
 app.MapWebAuthnEndpoints();
 
+// Map dedicated authentication endpoints for browser-based OAuth flows
+app.MapAuthenticationEndpoints();
+
+// Add session validation middleware (BEFORE authentication)
+app.UseMiddleware<SessionValidationMiddleware>();
+
 // Use standard ASP.NET Core authentication/authorization
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Map MCP endpoints with authentication required for enterprise security
-app.MapMcp().RequireAuthorization();
+// Map MCP endpoints with multi-scheme authentication (Cookie + JWT Bearer)
+// MCP clients can authenticate via session cookies created through OAuth flow
+var mcpEndpoint = app.MapMcp();
+
+// Apply authentication based on configuration
+var authConfig = app.Configuration.GetSection(AuthenticationConfiguration.SectionName).Get<AuthenticationConfiguration>();
+if (authConfig?.Mode != AuthenticationMode.Disabled)
+{
+    mcpEndpoint.RequireAuthorization("McpAccess");
+}
 
 // Optional: Add a health check endpoint
 app.MapGet("/health", () => Results.Ok(new { status = "healthy", timestamp = DateTime.UtcNow }));
