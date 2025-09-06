@@ -1,11 +1,12 @@
-# Enterprise Remote MCP Server
+# Remote MCP Server with Azure AD OAuth
 
-A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring enterprise authentication, multi-method user authentication, and comprehensive reflection capabilities.
+A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring OAuth 2.0 authentication via Microsoft Azure AD and comprehensive MCP tools.
 
 ## ✨ Key Features
 
-- **🔐 Enterprise Authentication**: OAuth 2.1 with multi-method authentication (password + WebAuthn)
-- **🛡️ Biometric Support**: Fingerprint, face recognition, and hardware security keys (YubiKey)
+- **🔐 OAuth 2.0 Authentication**: Full authorization server with Microsoft Azure AD integration
+- **🔑 Dynamic Client Registration**: RFC 7591 compliant for MCP clients
+- **🌐 Stateless Operation**: Works with stateless MCP clients using memory cache
 - **16 Tools** across 4 categories (Math, Utility, Data, Reflection)
 - **🔍 Self-Documenting** with 5 powerful reflection tools
 - **🌐 Network Ready** - accepts connections from any IP with proper security
@@ -50,7 +51,7 @@ A production-ready remote Model Context Protocol (MCP) server built with C# and 
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/scampcat/remote-mcp.git
+   git clone https://github.com/yourusername/remote-mcp.git
    cd remote-mcp
    ```
 
@@ -73,70 +74,65 @@ A production-ready remote Model Context Protocol (MCP) server built with C# and 
 
 ## 🔐 Authentication Setup
 
+### Azure AD Configuration
+
+1. **Register an Azure AD Application**:
+   - Go to Azure Portal > Azure Active Directory > App registrations
+   - Create new registration
+   - Add redirect URI: `http://localhost:3001/oauth/callback`
+   - Create a client secret and save it
+
+2. **Configure appsettings.json**:
+   ```bash
+   cp appsettings.json.example appsettings.json
+   ```
+   
+   Edit with your Azure AD credentials:
+   ```json
+   {
+     "Authentication": {
+       "Mode": "AuthorizationServer",
+       "OAuth": {
+         "Issuer": "http://localhost:3001"
+       },
+       "ExternalIdP": {
+         "Provider": "AzureAD",
+         "ClientSecret": "YOUR_AZURE_AD_CLIENT_SECRET",
+         "AzureAD": {
+           "TenantId": "YOUR_TENANT_ID",
+           "ClientId": "YOUR_CLIENT_ID",
+           "Authority": "https://login.microsoftonline.com/YOUR_TENANT_ID"
+         }
+       }
+     }
+   }
+   ```
+
 ### For Testing (Disable Authentication)
-Edit `appsettings.json` to disable authentication for development:
-```json
-{
-  "Authentication": {
-    "Mode": "Disabled"
-  }
-}
-```
-
-### For Production (Enable Authentication)
-Keep the default configuration for localhost development:
-```json
-{
-  "Authentication": {
-    "Mode": "AuthorizationServer",
-    "OAuth": {
-      "Issuer": "http://localhost:3001"
-    }
-  }
-}
-```
-
-For enterprise deployment, configure the OAuth issuer URL:
-```json
-{
-  "Authentication": {
-    "Mode": "AuthorizationServer", 
-    "OAuth": {
-      "Issuer": "https://auth.your-company.com"
-    }
-  }
-}
-```
+Set `Mode` to `"Disabled"` in appsettings.json to bypass authentication
 
 See [INTEGRATOR_GUIDE.md](INTEGRATOR_GUIDE.md#production-issuer-configuration) for detailed enterprise configuration options.
 
-### User Authentication Options
+### OAuth Flow
 
-When authentication is enabled, users can choose between:
+The server implements a complete OAuth 2.0 authorization server:
 
-#### 🔑 **Password Authentication**
-- **Username**: `test.user@company.com`
-- **Password**: `testpass`
-- Works with any browser
+1. **Dynamic Client Registration**: MCP clients register dynamically (RFC 7591)
+2. **Microsoft Authentication**: Users authenticate with their Microsoft account
+3. **Token Issuance**: Server issues its own JWT tokens after successful auth
+4. **Stateless Operation**: Uses memory cache for MCP clients that don't maintain cookies
 
-#### 🛡️ **WebAuthn Authentication**
-- **Biometric**: Fingerprint, face recognition
-- **Security Keys**: YubiKey, FIDO2 devices
-- **Registration**: Visit `http://localhost:3001/webauthn/register`
+## 🌐 OAuth Endpoints
 
-## 🌐 Browser Access
+### Discovery
+- `/.well-known/oauth-authorization-server` - OAuth metadata
+- `/.well-known/oauth-protected-resource` - Resource metadata
 
-### WebAuthn Registration
-Visit `http://localhost:3001/webauthn/register` to:
-- Register biometric credentials
-- Set up hardware security keys
-- Test WebAuthn functionality
-
-### OAuth Authorization Flow
-When connecting Claude Code, you'll see:
-- Professional login interface
-- Choice between password and WebAuthn
-- Clear instructions and error handling
+### OAuth Flow
+- `/register` - Dynamic client registration
+- `/authorize` - Authorization endpoint
+- `/oauth/callback` - Microsoft callback handler
+- `/token` - Token exchange endpoint
 
 ### Testing the Server
 
@@ -158,14 +154,17 @@ curl http://localhost:3001/
 # Expected: MCP protocol error (this confirms MCP is active)
 ```
 
-## 🔗 Claude Code Integration
+## 🔗 Claude Desktop/Claude.ai Integration
 
-### Option 1: Automatic Configuration
-The repository includes a `.mcp.json` file for immediate Claude Code integration:
+### Using Claude Desktop
+1. Install Claude Desktop
+2. Use the `/mcp` command
+3. Enter server URL: `http://localhost:3001`
+4. Complete Microsoft authentication when prompted
+5. MCP tools are now available
 
-```bash
-claude mcp add remote-math-server --scope project npx mcp-remote http://localhost:3001/
-```
+### Manual Configuration
+Add to MCP settings:
 
 ### Option 2: Manual Configuration
 Add to your Claude Code MCP configuration:

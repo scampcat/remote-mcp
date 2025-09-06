@@ -187,3 +187,12 @@ MigrationBackup/
 .claude/
 .cursorrules
 obj/
+
+## Configuration files (use example files instead)
+appsettings.json
+appsettings.*.json
+!appsettings.json.example
+
+## Debug and analysis files
+MICROSOFT_TOKEN_VALIDATION_FIX_AUDIT.md
+OAUTH_ARCHITECTURE_ANALYSIS.md

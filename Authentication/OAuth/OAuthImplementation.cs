@@ -214,18 +214,52 @@ public static class OAuthImplementation
             // Check if we need to forward this callback to mcp-remote on original port
             if (!string.IsNullOrEmpty(state))
             {
-                var originalRedirectUri = context.Session.GetString($"original_redirect_uri_{state}");
-                var currentUri = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}{context.Request.Path}";
-                if (!string.IsNullOrEmpty(originalRedirectUri) && !originalRedirectUri.StartsWith(currentUri))
+                // Store Microsoft's authorization code in state cache for our own token exchange
+                if (!string.IsNullOrEmpty(code))
                 {
-                    logger.LogInformation("OAuth 2.1 Loopback Redirect: Forwarding callback from {CurrentUri} to {OriginalUri}",
-                        currentUri, originalRedirectUri);
+                    // Store Microsoft's code associated with the state for later exchange
+                    SimpleOAuthEndpointProvider.StoreMicrosoftAuthorizationCode(state, code);
+                    logger.LogInformation("Stored Microsoft authorization code for state: {State}", state);
                     
-                    // Forward the callback to mcp-remote with all parameters
-                    var queryString = context.Request.QueryString.Value;
-                    var forwardUrl = originalRedirectUri + queryString;
+                    // Generate our own authorization code to return to the client
+                    var ourAuthCode = SimpleOAuthEndpointProvider.GenerateOurAuthorizationCode(state);
+                    logger.LogInformation("Generated our authorization code for client: {Code} -> {State}", 
+                        ourAuthCode.Substring(0, Math.Min(10, ourAuthCode.Length)) + "...", state);
                     
-                    return Results.Redirect(forwardUrl);
+                    // Get redirect URI from SimpleOAuthEndpointProvider's cache
+                    var originalRedirectUri = SimpleOAuthEndpointProvider.GetStoredRedirectUri(state);
+                    var currentUri = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}{context.Request.Path}";
+                    if (!string.IsNullOrEmpty(originalRedirectUri) && !originalRedirectUri.StartsWith(currentUri))
+                    {
+                        logger.LogInformation("OAuth 2.1 Loopback Redirect: Forwarding callback from {CurrentUri} to {OriginalUri}",
+                            currentUri, originalRedirectUri);
+                        
+                        // Forward the callback to mcp-remote with OUR authorization code, not Microsoft's
+                        var forwardUrl = $"{originalRedirectUri}?code={Uri.EscapeDataString(ourAuthCode)}&state={Uri.EscapeDataString(state)}";
+                        if (!string.IsNullOrEmpty(context.Request.Query["session_state"]))
+                        {
+                            forwardUrl += $"&session_state={Uri.EscapeDataString(context.Request.Query["session_state"]!)}";
+                        }
+                        
+                        return Results.Redirect(forwardUrl);
+                    }
+                }
+                else
+                {
+                    // Get redirect URI from SimpleOAuthEndpointProvider's cache
+                    var originalRedirectUri = SimpleOAuthEndpointProvider.GetStoredRedirectUri(state);
+                    var currentUri = $"{context.Request.Scheme}://{context.Request.Host}{context.Request.PathBase}{context.Request.Path}";
+                    if (!string.IsNullOrEmpty(originalRedirectUri) && !originalRedirectUri.StartsWith(currentUri))
+                    {
+                        logger.LogInformation("OAuth 2.1 Loopback Redirect: Forwarding callback from {CurrentUri} to {OriginalUri}",
+                            currentUri, originalRedirectUri);
+                        
+                        // Forward the callback to mcp-remote with all parameters (error case)
+                        var queryString = context.Request.QueryString.Value;
+                        var forwardUrl = originalRedirectUri + queryString;
+                        
+                        return Results.Redirect(forwardUrl);
+                    }
                 }
             }
             
