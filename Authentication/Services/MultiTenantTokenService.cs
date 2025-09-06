@@ -19,6 +19,7 @@ public class MultiTenantTokenService : IMultiTenantTokenService
     private readonly ILogger<MultiTenantTokenService> _logger;
     private readonly IOptionsMonitor<AuthenticationConfiguration> _authConfig;
     private readonly ITokenService _baseTokenService;
+    private readonly ICryptographicUtilityService _cryptographicUtilityService;
     
     // Tenant-specific encryption keys for isolation
     private readonly Dictionary<string, SecurityKey> _tenantSigningKeys = new();
@@ -29,11 +30,13 @@ public class MultiTenantTokenService : IMultiTenantTokenService
     public MultiTenantTokenService(
         ILogger<MultiTenantTokenService> logger,
         IOptionsMonitor<AuthenticationConfiguration> authConfig,
-        ITokenService baseTokenService)
+        ITokenService baseTokenService,
+        ICryptographicUtilityService cryptographicUtilityService)
     {
         _logger = logger;
         _authConfig = authConfig;
         _baseTokenService = baseTokenService;
+        _cryptographicUtilityService = cryptographicUtilityService;
         
         InitializeDefaultTenants();
     }
@@ -328,12 +331,12 @@ public class MultiTenantTokenService : IMultiTenantTokenService
     {
         if (!_tenantSigningKeys.TryGetValue(tenantId, out var key))
         {
-            // Create tenant-specific RSA key
-            var rsa = RSA.Create(2048);
-            key = new RsaSecurityKey(rsa);
+            // Use centralized cryptographic service to eliminate duplication
+            var keyId = $"tenant-{tenantId}-signing-key";
+            key = _cryptographicUtilityService.CreateRSASigningKey(2048, keyId);
             _tenantSigningKeys[tenantId] = key;
             
-            _logger.LogInformation("Created tenant-specific signing key for {TenantId}", tenantId);
+            _logger.LogInformation("Created tenant-specific signing key for {TenantId} using centralized service", tenantId);
         }
         
         return key;

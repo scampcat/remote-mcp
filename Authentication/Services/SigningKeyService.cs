@@ -8,11 +8,18 @@ namespace Authentication.Services;
 /// Enterprise signing key service implementing SOLID principles.
 /// Single Responsibility: Manages JWT signing keys consistently.
 /// Dependency Inversion: Provides abstractions for key management.
+/// Refactored to use CryptographicUtilityService, eliminating code duplication.
 /// </summary>
 public class SigningKeyService : ISigningKeyService
 {
+    private readonly ICryptographicUtilityService _cryptographicUtilityService;
     private static SecurityKey? _sharedSigningKey;
     private static readonly object _keyLock = new object();
+
+    public SigningKeyService(ICryptographicUtilityService cryptographicUtilityService)
+    {
+        _cryptographicUtilityService = cryptographicUtilityService;
+    }
 
     /// <summary>
     /// Gets the current signing key for JWT token creation and validation.
@@ -26,7 +33,7 @@ public class SigningKeyService : ISigningKeyService
             {
                 if (_sharedSigningKey == null)
                 {
-                    _sharedSigningKey = CreateConsistentSigningKey();
+                    _sharedSigningKey = _cryptographicUtilityService.CreateRSASigningKey(2048, "enterprise-signing-key");
                 }
             }
         }
@@ -62,25 +69,4 @@ public class SigningKeyService : ISigningKeyService
         };
     }
 
-    /// <summary>
-    /// Creates consistent RSA signing key for enterprise JWT operations.
-    /// </summary>
-    private SecurityKey CreateConsistentSigningKey()
-    {
-        using var rsa = RSA.Create(2048); // Enterprise-grade 2048-bit key
-        var key = new RsaSecurityKey(rsa.ExportParameters(false)) // Public key only for validation
-        {
-            KeyId = "enterprise-signing-key"
-        };
-        
-        // Export and import to create a persistent key
-        var keyBytes = rsa.ExportRSAPrivateKey();
-        var persistentRsa = RSA.Create();
-        persistentRsa.ImportRSAPrivateKey(keyBytes, out _);
-        
-        return new RsaSecurityKey(persistentRsa)
-        {
-            KeyId = "enterprise-signing-key"
-        };
-    }
 }

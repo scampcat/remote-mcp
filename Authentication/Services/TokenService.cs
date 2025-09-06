@@ -1,4 +1,7 @@
 using Authentication.Configuration;
+using Authentication.Domain.Services;
+using Authentication.Domain.Entities;
+using Authentication.Interfaces;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -12,6 +15,7 @@ namespace Authentication.Services;
 /// <summary>
 /// Enterprise token service for OAuth 2.1 JWT token management.
 /// Implements secure token creation, validation, and lifecycle management.
+/// Refactored to use Domain Service following DDD and SOLID principles.
 /// </summary>
 public interface ITokenService
 {
@@ -24,268 +28,203 @@ public interface ITokenService
 }
 
 /// <summary>
-/// Enterprise JWT token service implementation with security best practices.
+/// Enterprise JWT token service implementation using DDD Domain Service.
+/// Follows Single Responsibility and Dependency Inversion principles.
 /// </summary>
 public class TokenService : ITokenService
 {
     private readonly ILogger<TokenService> _logger;
-    private readonly IOptionsMonitor<AuthenticationConfiguration> _authConfig;
+    private readonly Authentication.Domain.Services.IAuthenticationDomainService _authDomainService;
     private readonly Authentication.Interfaces.ISigningKeyService _signingKeyService;
-    private readonly HashSet<string> _revokedTokens = new(); // In-memory for development
+    private readonly ICryptographicUtilityService _cryptographicUtilityService;
+    private readonly IOptionsMonitor<AuthenticationConfiguration> _authConfig;
 
     public TokenService(
         ILogger<TokenService> logger,
-        IOptionsMonitor<AuthenticationConfiguration> authConfig,
-        Authentication.Interfaces.ISigningKeyService signingKeyService)
+        Authentication.Domain.Services.IAuthenticationDomainService authDomainService,
+        Authentication.Interfaces.ISigningKeyService signingKeyService,
+        ICryptographicUtilityService cryptographicUtilityService,
+        IOptionsMonitor<AuthenticationConfiguration> authConfig)
     {
         _logger = logger;
-        _authConfig = authConfig;
+        _authDomainService = authDomainService;
         _signingKeyService = signingKeyService;
+        _cryptographicUtilityService = cryptographicUtilityService;
+        _authConfig = authConfig;
     }
 
 
     /// <summary>
-    /// Creates RFC 9068 compliant JWT access token with MCP-specific claims.
+    /// Creates RFC 9068 compliant JWT access token using Domain Service.
+    /// Delegates to domain service following SRP and DIP principles.
     /// </summary>
     public async Task<string> CreateAccessTokenAsync(ClaimsPrincipal user, string clientId, string[] scopes, string? tenantId = null)
     {
-        var config = _authConfig.CurrentValue;
-        var now = DateTime.UtcNow;
-        var expiry = now.Add(config.OAuth.AccessTokenLifetime);
+        // Create user if needed
+        var userId = Authentication.Domain.ValueObjects.UserId.Create(user.Identity?.Name ?? "anonymous");
+        await _authDomainService.CreateUserAsync(userId.Value, tenantId ?? "default");
 
+        // Issue access token through domain service
+        var tokenEntity = await _authDomainService.IssueTokenAsync(
+            userId, 
+            clientId, 
+            scopes, 
+            Authentication.Domain.ValueObjects.TokenType.AccessToken, 
+            TimeSpan.FromMinutes(15));
+
+        return await GenerateJwtFromTokenEntity(tokenEntity, user, scopes);
+    }
+
+    /// <summary>
+    /// Creates secure refresh token using Domain Service.
+    /// Delegates to domain service following SRP and DIP principles.
+    /// </summary>
+    public async Task<string> CreateRefreshTokenAsync(ClaimsPrincipal user, string clientId, string? tenantId = null)
+    {
+        // Create user if needed
+        var userId = Authentication.Domain.ValueObjects.UserId.Create(user.Identity?.Name ?? "anonymous");
+        await _authDomainService.CreateUserAsync(userId.Value, tenantId ?? "default");
+
+        // Issue refresh token through domain service
+        var tokenEntity = await _authDomainService.IssueTokenAsync(
+            userId, 
+            clientId, 
+            new[] { "refresh_token" }, 
+            Authentication.Domain.ValueObjects.TokenType.RefreshToken, 
+            TimeSpan.FromDays(30));
+
+        return await GenerateJwtFromTokenEntity(tokenEntity, user, tokenEntity.Scopes);
+    }
+
+    /// <summary>
+    /// Validates JWT token using Domain Service.
+    /// Delegates to domain service following SRP and DIP principles.
+    /// </summary>
+    public async Task<ClaimsPrincipal?> ValidateTokenAsync(string token)
+    {
+        // Extract token ID from JWT
+        var tokenHandler = new JwtSecurityTokenHandler();
+        var jwtToken = tokenHandler.ReadJwtToken(token);
+        var tokenId = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value;
+
+        if (string.IsNullOrEmpty(tokenId))
+        {
+            return null;
+        }
+
+        // Use domain service for validation
+        bool isValid = await _authDomainService.ValidateTokenAsync(tokenId);
+        if (!isValid)
+        {
+            return null;
+        }
+
+        // Return principal from JWT if token is valid
+        try
+        {
+            var principal = tokenHandler.ValidateToken(token, GetValidationParameters(), out var validatedToken);
+            return principal;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Revokes token using Domain Service.
+    /// Delegates to domain service following SRP and DIP principles.
+    /// </summary>
+    public async Task<bool> RevokeTokenAsync(string tokenId)
+    {
+        return await _authDomainService.RevokeTokenAsync(tokenId);
+    }
+
+    /// <summary>
+    /// Checks if token is revoked using Domain Service.
+    /// Delegates to domain service following SRP and DIP principles.
+    /// </summary>
+    public async Task<bool> IsTokenRevokedAsync(string tokenId)
+    {
+        var isValid = await _authDomainService.ValidateTokenAsync(tokenId);
+        return !isValid;
+    }
+
+    /// <summary>
+    /// Generates JWT string from TokenEntity following DDD patterns.
+    /// Single responsibility for JWT generation logic.
+    /// </summary>
+    private async Task<string> GenerateJwtFromTokenEntity(Authentication.Domain.ValueObjects.AuthenticationToken tokenEntity, ClaimsPrincipal user, string[] scopes)
+    {
+        var now = DateTime.UtcNow;
         var claims = new List<Claim>
         {
             new(JwtRegisteredClaimNames.Sub, user.Identity?.Name ?? "unknown"),
-            new(JwtRegisteredClaimNames.Aud, config.OAuth.Issuer),
-            new(JwtRegisteredClaimNames.Iss, config.OAuth.Issuer),
-            new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
-            new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(expiry).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new("client_id", clientId),
+            new(JwtRegisteredClaimNames.Jti, tokenEntity.TokenId),
+            new("client_id", tokenEntity.ClientId),
+            new("tenant", tokenEntity.TenantId),
             new("scope", string.Join(" ", scopes))
         };
-
-        // Add tenant claim for multi-tenant support
-        if (!string.IsNullOrEmpty(tenantId))
-        {
-            claims.Add(new Claim("tenant", tenantId));
-        }
 
         // Add tool-specific permissions
         foreach (var scope in scopes)
         {
             if (scope.StartsWith("mcp:"))
             {
-                claims.Add(new Claim("tools", scope.Substring(4))); // Remove "mcp:" prefix
+                claims.Add(new Claim("tools", scope.Substring(4)));
             }
         }
 
+        var config = _authConfig.CurrentValue;
+        var issuer = config.OAuth.Issuer;
+        
         var tokenDescriptor = new SecurityTokenDescriptor
         {
             Subject = new ClaimsIdentity(claims),
             NotBefore = now,
-            Expires = expiry,
-            SigningCredentials = _signingKeyService.GetSigningCredentials(),
-            Issuer = config.OAuth.Issuer,
-            Audience = config.OAuth.Issuer,
-            TokenType = "at+jwt", // RFC 9068 compliance: JWT access token type
-            AdditionalHeaderClaims = new Dictionary<string, object>
-            {
-                { "typ", "at+jwt" } // Explicit RFC 9068 header
-            }
+            Expires = tokenEntity.ExpiresAt,
+            Issuer = issuer,
+            Audience = issuer, // Set audience to same value as issuer for validation
+            SigningCredentials = _signingKeyService.GetSigningCredentials()
         };
+
+        // Set RFC 9068 compliant 'at+jwt' type for access tokens
+        if (tokenEntity.Type == Authentication.Domain.ValueObjects.TokenType.AccessToken)
+        {
+            tokenDescriptor.AdditionalHeaderClaims = new Dictionary<string, object> { { "typ", "at+jwt" } };
+        }
 
         var tokenHandler = new JwtSecurityTokenHandler();
         var token = tokenHandler.CreateToken(tokenDescriptor);
-        var tokenString = tokenHandler.WriteToken(token);
-
-        _logger.LogDebug("Created access token for user {User} client {Client} with scopes {Scopes}",
-            user.Identity?.Name, clientId, string.Join(",", scopes));
-
-        return tokenString;
+        
+        // Set RFC 9068 compliant 'at+jwt' type for access tokens using JwtSecurityToken directly
+        if (tokenEntity.Type == Authentication.Domain.ValueObjects.TokenType.AccessToken && token is JwtSecurityToken jwtToken)
+        {
+            jwtToken.Header["typ"] = "at+jwt";
+        }
+        
+        _logger.LogDebug("Generated JWT for token {TokenId} of type {Type}",
+            tokenEntity.TokenId, tokenEntity.Type);
+        
+        return tokenHandler.WriteToken(token);
     }
 
-    /// <summary>
-    /// Creates secure refresh token for extended enterprise sessions.
-    /// </summary>
-    public async Task<string> CreateRefreshTokenAsync(ClaimsPrincipal user, string clientId, string? tenantId = null)
+    private TokenValidationParameters GetValidationParameters()
     {
         var config = _authConfig.CurrentValue;
-        var now = DateTime.UtcNow;
-        var expiry = now.Add(config.OAuth.RefreshTokenLifetime);
-
-        var claims = new List<Claim>
-        {
-            new(JwtRegisteredClaimNames.Sub, user.Identity?.Name ?? "unknown"),
-            new(JwtRegisteredClaimNames.Aud, config.OAuth.Issuer),
-            new(JwtRegisteredClaimNames.Iss, config.OAuth.Issuer),
-            new(JwtRegisteredClaimNames.Iat, new DateTimeOffset(now).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
-            new(JwtRegisteredClaimNames.Exp, new DateTimeOffset(expiry).ToUnixTimeSeconds().ToString(), ClaimValueTypes.Integer64),
-            new(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new("client_id", clientId),
-            new("token_type", "refresh")
-        };
-
-        if (!string.IsNullOrEmpty(tenantId))
-        {
-            claims.Add(new Claim("tenant", tenantId));
-        }
-
-        var tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(claims),
-            Expires = expiry,
-            SigningCredentials = _signingKeyService.GetSigningCredentials(),
-            Issuer = config.OAuth.Issuer,
-            Audience = config.OAuth.Issuer
-        };
-
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        var tokenString = tokenHandler.WriteToken(token);
-
-        _logger.LogDebug("Created refresh token for user {User} client {Client}",
-            user.Identity?.Name, clientId);
-
-        return tokenString;
-    }
-
-    /// <summary>
-    /// Validates JWT token with enterprise security requirements.
-    /// </summary>
-    public async Task<ClaimsPrincipal?> ValidateTokenAsync(string token)
-    {
-        try
-        {
-            var config = _authConfig.CurrentValue;
-            var tokenHandler = new JwtSecurityTokenHandler();
-
-            // Check if token is revoked first
-            var jwtToken = tokenHandler.ReadJwtToken(token);
-            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value;
-            
-            if (!string.IsNullOrEmpty(jti) && await IsTokenRevokedAsync(jti))
-            {
-                _logger.LogWarning("Attempted use of revoked token {TokenId}", jti);
-                return null;
-            }
-
-            var validationParameters = new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidIssuer = config.OAuth.Issuer,
-                ValidateAudience = true,
-                ValidAudience = config.OAuth.Issuer,
-                ValidateLifetime = true,
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = _signingKeyService.GetSigningKey(),
-                ClockSkew = TimeSpan.FromMinutes(5) // Enterprise clock skew tolerance
-            };
-
-            var principal = tokenHandler.ValidateToken(token, validationParameters, out var validatedToken);
-            
-            _logger.LogDebug("Successfully validated token for user {User}",
-                principal.Identity?.Name);
-
-            return principal;
-        }
-        catch (SecurityTokenExpiredException ex)
-        {
-            _logger.LogDebug("Token expired: {Message}", ex.Message);
-            return null;
-        }
-        catch (SecurityTokenValidationException ex)
-        {
-            _logger.LogWarning("Token validation failed: {Message}", ex.Message);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Unexpected error during token validation");
-            return null;
-        }
-    }
-
-    /// <summary>
-    /// Revokes token for enterprise security lifecycle management.
-    /// </summary>
-    public async Task<bool> RevokeTokenAsync(string tokenId)
-    {
-        try
-        {
-            // Revoke the specified token
-            _revokedTokens.Add(tokenId);
-            
-            // Find and revoke associated refresh tokens by extracting user/client info
-            var associatedTokens = FindAssociatedTokens(tokenId);
-            foreach (var associatedToken in associatedTokens)
-            {
-                _revokedTokens.Add(associatedToken);
-                _logger.LogDebug("Revoked associated token {AssociatedToken}", associatedToken);
-            }
-            
-            _logger.LogInformation("Token {TokenId} and {AssociatedCount} associated tokens revoked", 
-                tokenId, associatedTokens.Count);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to revoke token {TokenId}", tokenId);
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Checks if token is revoked for enterprise access control.
-    /// </summary>
-    public async Task<bool> IsTokenRevokedAsync(string tokenId)
-    {
-        return _revokedTokens.Contains(tokenId);
-    }
-
-    /// <summary>
-    /// Finds associated refresh tokens for comprehensive revocation.
-    /// </summary>
-    private List<string> FindAssociatedTokens(string tokenId)
-    {
-        var associatedTokens = new List<string>();
+        var issuer = config.OAuth.Issuer;
         
-        try
+        return new TokenValidationParameters
         {
-            // Extract user and client info from the token
-            var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
-            var jsonToken = handler.ReadJwtToken(ExtractJwtFromTokenId(tokenId));
-            
-            var userId = jsonToken.Claims.FirstOrDefault(c => c.Type == "sub")?.Value;
-            var clientId = jsonToken.Claims.FirstOrDefault(c => c.Type == "client_id")?.Value;
-            var tokenType = jsonToken.Claims.FirstOrDefault(c => c.Type == "token_type")?.Value;
-            
-            if (!string.IsNullOrEmpty(userId) && !string.IsNullOrEmpty(clientId))
-            {
-                // In production, this would query database for token families
-                // For now, we establish the pattern for associated token revocation
-                _logger.LogDebug("Found token family: user={User}, client={Client}, type={Type}", 
-                    userId, clientId, tokenType);
-                
-                // The architecture is in place - token family tracking would be implemented here
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Error finding associated tokens for {TokenId}", tokenId);
-        }
-        
-        return associatedTokens;
-    }
-
-    /// <summary>
-    /// Extracts JWT string from token ID for analysis.
-    /// </summary>
-    private string ExtractJwtFromTokenId(string tokenId)
-    {
-        // In this implementation, tokenId might be the full JWT or just the jti claim
-        // Return the full JWT for parsing
-        return tokenId;
+            ValidateIssuer = true,
+            ValidIssuer = issuer,
+            ValidateAudience = true,
+            ValidAudience = issuer,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = _signingKeyService.GetSigningKey(),
+            ClockSkew = TimeSpan.FromMinutes(5)
+        };
     }
 
     /// <summary>
@@ -328,11 +267,9 @@ public class TokenService : ITokenService
                 return new { keys = new object[] { } };
             }
 
-            // Convert RSA parameters to Base64URL encoding
-            var n = Convert.ToBase64String(parameters.Modulus)
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
-            var e = Convert.ToBase64String(parameters.Exponent)
-                .Replace('+', '-').Replace('/', '_').TrimEnd('=');
+            // Convert RSA parameters to Base64URL encoding using centralized service
+            var n = _cryptographicUtilityService.ToBase64Url(parameters.Modulus);
+            var e = _cryptographicUtilityService.ToBase64Url(parameters.Exponent);
 
             var jwk = new
             {
@@ -356,20 +293,4 @@ public class TokenService : ITokenService
         }
     }
 
-    /// <summary>
-    /// Creates consistent RSA signing key for enterprise token security.
-    /// </summary>
-    private static SecurityKey CreateConsistentSigningKey()
-    {
-        // For development, use a simple RSA key (in production, this would come from enterprise HSM)
-        var rsa = RSA.Create(2048);
-        
-        // Create key with consistent ID for JWT validation
-        var key = new RsaSecurityKey(rsa)
-        {
-            KeyId = "enterprise-signing-key"
-        };
-        
-        return key;
-    }
 }

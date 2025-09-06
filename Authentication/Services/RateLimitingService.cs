@@ -1,6 +1,8 @@
 using Authentication.Interfaces;
 using Authentication.Models;
+using Authentication.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using System.Collections.Concurrent;
 
 namespace Authentication.Services;
@@ -11,47 +13,52 @@ namespace Authentication.Services;
 public class RateLimitingService : IRateLimitingService
 {
     private readonly ILogger<RateLimitingService> _logger;
+    private readonly AuthenticationConfiguration _authConfig;
     private readonly ConcurrentDictionary<string, List<DateTime>> _requests = new();
 
-    public RateLimitingService(ILogger<RateLimitingService> logger)
+    public RateLimitingService(ILogger<RateLimitingService> logger, IOptions<AuthenticationConfiguration> authConfig)
     {
         _logger = logger;
+        _authConfig = authConfig.Value;
     }
 
     /// <summary>
-    /// Simple rate limiting: 60 requests per minute per IP.
+    /// Rate limiting using configuration settings.
     /// </summary>
     public async Task<bool> IsRequestAllowedAsync(AuthenticationRequest request)
     {
         try
         {
-            var ip = request.ClientIPAddress;
+            var clientIp = request.ClientIPAddress;
             var now = DateTime.UtcNow;
             var oneMinuteAgo = now.AddMinutes(-1);
             
-            var requests = _requests.GetOrAdd(ip, _ => new List<DateTime>());
+            var requestList = _requests.GetOrAdd(clientIp, _ => new List<DateTime>());
+            var rateLimitConfig = _authConfig.Security.RateLimit;
             
-            lock (requests)
+            lock (requestList)
             {
                 // Remove old requests
-                requests.RemoveAll(time => time < oneMinuteAgo);
+                requestList.RemoveAll(time => time < oneMinuteAgo);
                 
-                // Check if under limit (5 requests for testing)
-                if (requests.Count >= 5)
+                // Check if under limit using configuration
+                var requestsPerMinute = rateLimitConfig.RequestsPerMinute;
+                if (requestList.Count >= requestsPerMinute)
                 {
-                    _logger.LogWarning("Rate limit exceeded for {IP}: {Count}/5 requests", ip, requests.Count);
+                    _logger.LogWarning("Rate limit exceeded for {IP}: {Count}/{Limit} requests", 
+                        clientIp, requestList.Count, requestsPerMinute);
                     return false;
                 }
                 
                 // Record this request
-                requests.Add(now);
+                requestList.Add(now);
                 return true;
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Rate limiting error - allowing request");
-            return true; // Fail open
+            return true; // Fail open for safety
         }
     }
 }

@@ -106,6 +106,8 @@ The server supports multiple authentication modes via `appsettings.json`:
 
 ### OAuth 2.1 Configuration
 
+#### Basic Development Configuration
+
 ```json
 {
   "Authentication": {
@@ -125,6 +127,36 @@ The server supports multiple authentication modes via `appsettings.json`:
   }
 }
 ```
+
+#### Production Issuer Configuration
+
+The `Issuer` URL is the OAuth 2.1 authorization server identifier used for token validation. Configure based on your deployment architecture:
+
+**Enterprise Domain:**
+```json
+"Issuer": "https://auth.company.com"
+```
+
+**API Gateway/Proxy:**
+```json
+"Issuer": "https://api-gateway.company.com/auth"
+```
+
+**Internal DNS:**
+```json
+"Issuer": "https://mcp-auth.internal.corp"
+```
+
+**Key Requirements:**
+- Must be accessible by all clients validating tokens
+- Should use HTTPS in production environments
+- Must match exactly between token issuance and validation
+- Supports OAuth 2.0 Authorization Server Metadata discovery at `{Issuer}/.well-known/oauth-authorization-server`
+
+**Environment-Specific Examples:**
+- **Development**: `http://localhost:3001`
+- **Staging**: `https://auth-staging.company.com`  
+- **Production**: `https://auth.company.com`
 
 ### WebAuthn Configuration
 

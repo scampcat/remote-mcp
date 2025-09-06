@@ -84,14 +84,31 @@ Edit `appsettings.json` to disable authentication for development:
 ```
 
 ### For Production (Enable Authentication)
-Keep the default configuration:
+Keep the default configuration for localhost development:
 ```json
 {
   "Authentication": {
-    "Mode": "AuthorizationServer"
+    "Mode": "AuthorizationServer",
+    "OAuth": {
+      "Issuer": "http://localhost:3001"
+    }
   }
 }
 ```
+
+For enterprise deployment, configure the OAuth issuer URL:
+```json
+{
+  "Authentication": {
+    "Mode": "AuthorizationServer", 
+    "OAuth": {
+      "Issuer": "https://auth.your-company.com"
+    }
+  }
+}
+```
+
+See [INTEGRATOR_GUIDE.md](INTEGRATOR_GUIDE.md#production-issuer-configuration) for detailed enterprise configuration options.
 
 ### User Authentication Options
 

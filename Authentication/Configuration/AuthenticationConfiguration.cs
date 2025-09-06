@@ -51,8 +51,9 @@ public class OAuthConfiguration
 {
     /// <summary>
     /// OAuth issuer URL for token validation.
+    /// Must be configured in appsettings.json - no default provided.
     /// </summary>
-    public string Issuer { get; set; } = "http://localhost:3001";
+    public string Issuer { get; set; } = string.Empty;
 
     /// <summary>
     /// Access token lifetime for enterprise security balance.
@@ -97,8 +98,9 @@ public class WebAuthnConfiguration
 
     /// <summary>
     /// Server domain for WebAuthn credential binding.
+    /// Must be configured in appsettings.json - no default provided.
     /// </summary>
-    public string ServerDomain { get; set; } = "localhost";
+    public string ServerDomain { get; set; } = string.Empty;
 
     /// <summary>
     /// Server display name for user-facing authentication.
@@ -107,8 +109,9 @@ public class WebAuthnConfiguration
 
     /// <summary>
     /// Allowed origins for WebAuthn credential usage.
+    /// Must be configured in appsettings.json - no default provided.
     /// </summary>
-    public string[] AllowedOrigins { get; set; } = { "http://localhost:3001" };
+    public string[] AllowedOrigins { get; set; } = Array.Empty<string>();
 
     /// <summary>
     /// Require attestation validation for enterprise security.
@@ -136,6 +139,16 @@ public class WebAuthnConfiguration
 /// </summary>
 public class ExternalIdPConfiguration
 {
+    /// <summary>
+    /// Identity provider type (AzureAD, AWSCognito, Generic).
+    /// </summary>
+    public string Provider { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Azure Active Directory configuration.
+    /// </summary>
+    public AzureADConfiguration AzureAD { get; set; } = new();
+
     /// <summary>
     /// External authorization server URL for resource server mode.
     /// </summary>
@@ -352,4 +365,35 @@ public enum TenantResolutionStrategy
     /// Resolve tenant from JWT token claims.
     /// </summary>
     Token
+}
+
+/// <summary>
+/// Azure Active Directory specific configuration.
+/// </summary>
+public class AzureADConfiguration
+{
+    /// <summary>
+    /// Azure AD tenant ID.
+    /// </summary>
+    public string TenantId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Azure AD application client ID.
+    /// </summary>
+    public string ClientId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Azure AD authority URL (base URL without /v2.0).
+    /// </summary>
+    public string Authority { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Configured redirect URIs for OAuth flow.
+    /// </summary>
+    public string[] RedirectUris { get; set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Required OAuth scopes.
+    /// </summary>
+    public string[] RequiredScopes { get; set; } = Array.Empty<string>();
 }

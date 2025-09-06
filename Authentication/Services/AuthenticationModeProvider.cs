@@ -72,9 +72,9 @@ public class AuthenticationModeProvider : IAuthenticationModeProvider
     /// <summary>
     /// Determines if authentication feature is supported in current mode.
     /// </summary>
-    public async Task<bool> SupportsFeatureAsync(AuthenticationFeature feature)
+    public Task<bool> SupportsFeatureAsync(AuthenticationFeature feature)
     {
-        return _currentMode switch
+        bool featureSupported = _currentMode switch
         {
             AuthenticationMode.Disabled => false,
             AuthenticationMode.ResourceServer => feature == AuthenticationFeature.ExternalIdPIntegration,
@@ -83,31 +83,40 @@ public class AuthenticationModeProvider : IAuthenticationModeProvider
             AuthenticationMode.ZeroTrust => true, // Zero trust supports all features
             _ => false
         };
+
+        return Task.FromResult(featureSupported);
     }
 
     /// <summary>
     /// Evaluates enterprise security policy for authentication decisions.
     /// </summary>
-    public async Task<PolicyResult> EvaluatePolicyAsync(SecurityPolicy policy, AuthenticationContext context)
+    public Task<PolicyResult> EvaluatePolicyAsync(SecurityPolicy policy, AuthenticationContext context)
     {
-        // Basic policy evaluation - will be enhanced in later sprints
-        if (policy.ToolPermissions.TryGetValue(context.Device?.DeviceType ?? "unknown", out var accessLevel))
+        // Extract device type with explicit variable (following SOLID/DRY principles)
+        string deviceType = context.Device?.DeviceType ?? "unknown";
+        
+        // Check tool permissions using explicit variables
+        bool hasToolPermission = policy.ToolPermissions.TryGetValue(deviceType, out var accessLevel);
+        
+        PolicyResult policyResult;
+        if (hasToolPermission && accessLevel == ToolAccessLevel.Denied)
         {
-            if (accessLevel == ToolAccessLevel.Denied)
+            policyResult = new PolicyResult
             {
-                return new PolicyResult
-                {
-                    IsAllowed = false,
-                    Reason = "Tool access denied by enterprise policy"
-                };
-            }
+                IsAllowed = false,
+                Reason = "Tool access denied by enterprise policy"
+            };
+        }
+        else
+        {
+            policyResult = new PolicyResult
+            {
+                IsAllowed = true,
+                Reason = "Policy evaluation passed"
+            };
         }
 
-        return new PolicyResult
-        {
-            IsAllowed = true,
-            Reason = "Policy evaluation passed"
-        };
+        return Task.FromResult(policyResult);
     }
 
     /// <summary>
