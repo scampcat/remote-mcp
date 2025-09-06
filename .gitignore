@@ -196,3 +196,7 @@ appsettings.*.json
 ## Debug and analysis files
 MICROSOFT_TOKEN_VALIDATION_FIX_AUDIT.md
 OAUTH_ARCHITECTURE_ANALYSIS.md
+
+## Local development files (keep local only)
+CLAUDE.md
+/publish/
