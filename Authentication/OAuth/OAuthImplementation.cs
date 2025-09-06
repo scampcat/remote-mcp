@@ -243,6 +243,28 @@ public static class OAuthImplementation
                         
                         return Results.Redirect(forwardUrl);
                     }
+                    
+                    // If we're not redirecting, show success page
+                    return Results.Content($@"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication Successful - MCP Server</title>
+    <link href='https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css' rel='stylesheet'>
+</head>
+<body class='bg-light'>
+    <div class='container' style='max-width: 600px; margin: 100px auto;'>
+        <div class='card'>
+            <div class='card-body text-center p-5'>
+                <i class='bi bi-check-circle text-success' style='font-size: 4rem;'></i>
+                <h3 class='mt-3'>Authorization successful!</h3>
+                <p class='text-muted'>You may close this window and return to the CLI.</p>
+                <p class='text-muted mt-3'><small>Authorization code: {ourAuthCode.Substring(0, 10)}...</small></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>", "text/html");
                 }
                 else
                 {
