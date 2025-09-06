@@ -1,11 +1,12 @@
 # Remote MCP Server with Azure AD OAuth
 
-A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring OAuth 2.0 authentication via Microsoft Azure AD and comprehensive MCP tools.
+A production-ready remote Model Context Protocol (MCP) server built with C# and ASP.NET Core, featuring OAuth 2.1 authentication with mandatory PKCE via Microsoft Azure AD and comprehensive MCP tools.
 
 ## ✨ Key Features
 
-- **🔐 OAuth 2.0 Authentication**: Full authorization server with Microsoft Azure AD integration
+- **🔐 OAuth 2.1 Authentication**: Full authorization server with Microsoft Azure AD integration and mandatory PKCE
 - **🔑 Dynamic Client Registration**: RFC 7591 compliant for MCP clients
+- **🖐️ WebAuthn Biometric Support**: Face ID, Touch ID, and security key authentication
 - **🌐 Stateless Operation**: Works with stateless MCP clients using memory cache
 - **16 Tools** across 4 categories (Math, Utility, Data, Reflection)
 - **🔍 Self-Documenting** with 5 powerful reflection tools
@@ -115,7 +116,7 @@ See [INTEGRATOR_GUIDE.md](INTEGRATOR_GUIDE.md#production-issuer-configuration) f
 
 ### OAuth Flow
 
-The server implements a complete OAuth 2.0 authorization server:
+The server implements a complete OAuth 2.1 authorization server with mandatory PKCE:
 
 1. **Dynamic Client Registration**: MCP clients register dynamically (RFC 7591)
 2. **Microsoft Authentication**: Users authenticate with their Microsoft account
