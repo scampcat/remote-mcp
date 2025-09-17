@@ -77,36 +77,46 @@ A production-ready remote Model Context Protocol (MCP) server built with C# and 
 
 ### Azure AD Configuration
 
+#### Option 1: Automated Setup (Recommended)
+```bash
+# Sets up Azure AD app registration automatically
+./setup-azure-ad.sh
+
+# The script will:
+# 1. Create/update Azure AD app registration
+# 2. Configure redirect URIs
+# 3. Update appsettings.json automatically
+# 4. Optionally create a client secret (for confidential client mode)
+```
+
+#### Option 2: Manual Setup
 1. **Register an Azure AD Application**:
    - Go to Azure Portal > Azure Active Directory > App registrations
    - Create new registration
    - Add redirect URI: `http://localhost:3001/oauth/callback`
-   - Create a client secret and save it
+   - Optionally create a client secret for confidential client mode
 
-2. **Configure appsettings.json**:
-   ```bash
-   cp appsettings.json.example appsettings.json
-   ```
+2. **Configure Authentication**:
+   The application supports two authentication modes:
    
-   Edit with your Azure AD credentials:
+   **Public Client with PKCE** (Default - no secret needed):
    ```json
    {
      "Authentication": {
-       "Mode": "AuthorizationServer",
-       "OAuth": {
-         "Issuer": "http://localhost:3001"
-       },
        "ExternalIdP": {
-         "Provider": "AzureAD",
-         "ClientSecret": "YOUR_AZURE_AD_CLIENT_SECRET",
-         "AzureAD": {
-           "TenantId": "YOUR_TENANT_ID",
-           "ClientId": "YOUR_CLIENT_ID",
-           "Authority": "https://login.microsoftonline.com/YOUR_TENANT_ID"
-         }
+         "ClientSecret": ""
        }
      }
    }
+   ```
+   
+   **Confidential Client** (Recommended for production):
+   ```bash
+   # Set client secret via environment variable (never hardcode!)
+   export Authentication__ExternalIdP__ClientSecret="your-secret-here"
+   
+   # Or use Azure Key Vault for production
+   ./setup-azure-secrets.sh
    ```
 
 ### For Testing (Disable Authentication)
@@ -281,12 +291,29 @@ export ASPNETCORE_URLS=http://0.0.0.0:3001
 ```
 remote-mcp/
 ├── Program.cs              # Server configuration and startup
-├── Tools/                  # SOLID-compliant tool organization
+├── Authentication/         # Enterprise authentication system
+│   ├── Controllers/       # Auth API endpoints
+│   ├── Domain/            # DDD domain entities and services
+│   ├── Middleware/        # Auth middleware (OAuth 2.1, rate limiting)
+│   ├── OAuth/             # OAuth implementation
+│   ├── Services/          # Auth services (token, multi-tenant, etc.)
+│   └── WebAuthn/          # WebAuthn/Passkey support
+├── Configuration/          # App configuration and settings
+├── Data/                   # Data access layer
+├── Services/               # Core services (MCP lifecycle, etc.)
+├── Tools/                  # SOLID-compliant MCP tools
 │   ├── MathTools.cs       # Math operations (Add, Subtract, Multiply, Divide)
 │   ├── UtilityTools.cs    # Utility functions (Echo, Time, Random)
 │   ├── DataTools.cs       # Data manipulation (JSON, Case, Reverse)
-│   └── ReflectionTools.cs # Introspection tools (5 reflection capabilities)
+│   ├── ReflectionTools.cs # Introspection (5 reflection capabilities)
+│   └── AuthenticationTools.cs # OAuth flow testing tools
+├── Properties/             # Launch settings and profiles
+├── documentation/          # Additional docs and guides
 ├── remote-mcp.csproj       # Project configuration
+├── appsettings.json        # Server configuration
+├── setup-azure-ad.sh       # Azure AD setup script
+├── setup-azure-secrets.sh  # Secret management script
+├── implode.sh             # Cleanup script
 ├── .mcp.json              # MCP client integration
 ├── CLAUDE.md              # Development guide
 ├── LICENSE                # MIT License

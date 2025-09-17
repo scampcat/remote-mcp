@@ -180,10 +180,74 @@ test_configuration() {
     echo "✅ Configuration test passed"
 }
 
+# Function to manage client secret
+manage_client_secret() {
+    local client_id="$1"
+    
+    echo ""
+    echo "🔐 Client Secret Management"
+    echo ""
+    echo "Your Azure AD app supports both authentication modes:"
+    echo "  1. Public client with PKCE (no secret needed) - CURRENTLY ACTIVE"
+    echo "  2. Confidential client with secret (more secure for servers)"
+    echo ""
+    
+    # Check if a secret is already configured in environment
+    if [ -n "${Authentication__ExternalIdP__ClientSecret}" ]; then
+        echo "✅ Client secret already configured via environment variable"
+        return
+    fi
+    
+    # Ask user if they want to create a client secret
+    echo "Would you like to create a client secret for confidential client mode?"
+    echo "Note: This is recommended for production server deployments."
+    read -p "Create client secret? (y/n) [n]: " create_secret
+    
+    if [ "${create_secret}" = "y" ] || [ "${create_secret}" = "Y" ]; then
+        echo ""
+        echo "🔑 Creating new client secret..."
+        
+        # Create secret with 2-year expiry
+        SECRET_JSON=$(az ad app credential reset --id "$client_id" --years 2 --query '{password: password, keyId: keyId}' --output json 2>/dev/null)
+        
+        if [ $? -eq 0 ]; then
+            CLIENT_SECRET=$(echo "$SECRET_JSON" | jq -r '.password')
+            KEY_ID=$(echo "$SECRET_JSON" | jq -r '.keyId')
+            
+            echo ""
+            echo "✅ Client secret created successfully!"
+            echo ""
+            echo "⚠️  IMPORTANT: Save this secret securely - it won't be shown again!"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "$CLIENT_SECRET"
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            echo "To use this secret, set it as an environment variable:"
+            echo ""
+            echo "  export Authentication__ExternalIdP__ClientSecret=\"$CLIENT_SECRET\""
+            echo ""
+            echo "Or use the setup-azure-secrets.sh script for secure storage."
+            echo ""
+            echo "Secret ID: $KEY_ID (expires in 2 years)"
+        else
+            echo "❌ Failed to create client secret"
+            echo "You can create one manually later using:"
+            echo "  az ad app credential reset --id $client_id --years 2"
+        fi
+    else
+        echo ""
+        echo "✅ Continuing with PKCE-only authentication (public client mode)"
+        echo "   You can add a client secret later if needed."
+    fi
+}
+
 # Function to show next steps
 show_next_steps() {
     local client_id=$(cat appsettings.json | jq -r '.Authentication.ExternalIdP.AzureAD.ClientId')
     local auth_url="${OAUTH_ISSUER}/authorize"
+    
+    # Manage client secret
+    manage_client_secret "$client_id"
     
     echo ""
     echo "🎉 Azure AD setup completed successfully!"
